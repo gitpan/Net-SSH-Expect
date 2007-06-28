@@ -23,7 +23,7 @@ use Expect;
 use Carp;
 use POSIX qw(:signal_h WNOHANG);
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 # error contants
 use constant ILLEGAL_STATE => "IllegalState";
@@ -404,7 +404,7 @@ Path to a file to save all the ssh conversation. Default is no log file.
 
 =over 4
 
-=item B<connect()>
+=item B<connect()> - establishes an ssh connection with the ssh server
 
 =over 4
 
@@ -418,13 +418,17 @@ undef
 
 =item dies:
 
-die_reason1: etc
+IllegalState: if any of 'host' or 'user' or 'password' fields are unset.
 
-die_reason2: etc
+RemotePromptUnavailable: if the prompt on the remote machine can't be obtained after establishing the ssh connection
+
+SSHProccessError: if can't spawn the ssh process
+
+SSHConnectionError: if the connection failed for some reason, like invalid 'host' address or network problems.
 
 =back
 
-=item B<exec($remote_cmd [, $block])>
+=item B<exec($remote_cmd [, $block])> - executes a command in the remote machine
 
 =over 4
 
@@ -462,27 +466,17 @@ RemotePromptUnavailable: if the prompt is not available for execution of $remote
 
 =back
 
-=item B<close()>
+=item B<close()> - terminates the ssh connection
 
 =over 4
-
-=item params:
-
-none
 
 =item returns:
 
 undef
 
-=item dies:
-
-die_reason1: etc 
-
-die_reason2: etc
-
 =back
 
-=item B<get_expect()>
+=item B<get_expect()> - returns a connected Expect object
 
 =over 4
 
@@ -496,9 +490,7 @@ an C<Expect> object connected to the SSH server. It will die if you try to run i
 
 =item dies:
 
-die_reason1: etc 
-
-die_reason2: etc
+IllegalState: if this there is no valid ssh connection established
 
 =back
 
