@@ -1,0 +1,6 @@
+Revision history for Perl extension Net::SSH::Expect.
+
+0.01  Tue Jun 26 15:27:49 2007
+	- original version; created by h2xs 1.23 with options
+		-XA -n Net::SSH::Expect
+
