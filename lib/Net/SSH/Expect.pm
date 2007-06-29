@@ -23,7 +23,7 @@ use Expect;
 use Carp;
 use POSIX qw(:signal_h WNOHANG);
 
-our $VERSION = '0.04';
+our $VERSION = '0.05';
 
 # error contants
 use constant ILLEGAL_STATE => "IllegalState";
@@ -374,11 +374,11 @@ takes a long time to return.
 
 =item B<error_handler>
 
-TODO
+Please see docs in Net::SCP::Expect to know how this option works.
 
 =item B<cipher>
 
-TODO
+Please see docs in Net::SCP::Expect to know how this option works.
 
 =item B<port>
 
@@ -386,11 +386,11 @@ alternate ssh port. default is 22.
 
 =item B<protocol>
 
-TODO
+Please see docs in Net::SCP::Expect to know how this option works.
 
 =item B<identity_file>
 
-TODO
+Please see docs in Net::SCP::Expect to know how this option works.
 
 =item B<log_file>
 
@@ -403,6 +403,21 @@ Path to a file to save all the ssh conversation. Default is no log file.
 =over 4
 
 =item B<connect()> - establishes an ssh connection with the ssh server
+
+This method will use the values set in C<user> and C<password> to authenticate to the 
+SSH server identified by C<host>.
+
+If it connects and authenticates successfully its first step will be trying to set
+the prompt in the remote machine to 'I<SSH_PROMPT>E<gt>E<gt>I< >' by sending a command
+that changes the value of the I<$PS1> environment variable, what should replace the 
+unknown remote prompt to this well know string.
+
+C<connect()> only returns after it sets the remote prompt successfully, it will die 
+otherwise.
+
+Setting the remote prompt to this constant, well-known string is important to the 
+functioning of C<exec()>. That method will know that the command it ran finished the
+execution when it sees the prompt string, 'I<SSH_PROMPT>E<gt>E<gt>I< >', appearing again.
 
 =over 4
 
@@ -427,6 +442,12 @@ SSHConnectionError: if the connection failed for some reason, like invalid 'host
 =back
 
 =item B<exec($remote_cmd [, $block])> - executes a command in the remote machine
+
+This method will try to execute the $remote_cmd on the SSH server and return the command's output. 
+C<exec()> knows that $remote_cmd finished its execution on the remote machine when the remote prompt
+string is received after the command was sent.
+
+See C<connect()> to read info on what the remote prompt string looks like.
 
 =over 4
 
@@ -492,15 +513,13 @@ IllegalState: if this there is no valid ssh connection established
 
 =back
 
-
-=back
 =head1 SEE ALSO
 
 Net::SCP::Expect, Net::SCP, Net::SSH::Perl, L<Expect>
 
-If you have a mailing list set up for your module, mention it here.
+=head1 REPORT YOUR TESTS TO ME, PLEASE
 
-If you have a web site set up for your module, mention it here.
+Please email me if you had problems of successes using my module. This way I can, one day, flag this module as "mature" in the modules database.
 
 =head1 AUTHOR
 
