@@ -12,4 +12,3 @@ BEGIN { use_ok('Net::SSH::Expect') };
 
 # Insert your test code below, the Test::More module is use()ed here so read
 # its man page ( perldoc Test::More ) for help writing this test script.
-ok (1, "I won't test it now. make your test when you have it installed.");

@@ -23,7 +23,7 @@ use Expect;
 use Carp;
 use POSIX qw(:signal_h WNOHANG);
 
-our $VERSION = '0.03';
+our $VERSION = '0.04';
 
 # error contants
 use constant ILLEGAL_STATE => "IllegalState";
@@ -44,7 +44,6 @@ sub new {
     $self->{host} 			= $args{host}|| undef;
     $self->{user}  			= $args{user} || $ENV{'USER'};
     $self->{password} 		= $args{password} || undef;
-	$self->{auto_yes} 		= $args{auto_yes} || 1;
 	$self->{verbose}		= $args{verbose} || 0;
 	$self->{timeout}		= $args{timeout} || 10;
 	$self->{error_handler} 	= $args{error_handler} || undef;
@@ -76,7 +75,6 @@ sub connect {
 	my $user = $self->{user};
 	my $host = $self->{host};
 	my $password = $self->{password};
-	my $auto_yes = $self->{auto_yes};
 	my $timeout = $self->{timeout};
 	my $handler = $self->{error_handler};
 	my $cipher = $self->{cipher};
