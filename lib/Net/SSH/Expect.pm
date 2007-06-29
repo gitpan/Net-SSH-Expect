@@ -23,7 +23,7 @@ use Expect;
 use Carp;
 use POSIX qw(:signal_h WNOHANG);
 
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 
 # error contants
 use constant ILLEGAL_STATE => "IllegalState";

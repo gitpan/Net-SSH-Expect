@@ -5,8 +5,8 @@ use ExtUtils::MakeMaker;
 WriteMakefile(
     NAME              => 'Net::SSH::Expect',
     VERSION_FROM      => 'lib/Net/SSH/Expect.pm', # finds $VERSION
-    PREREQ_PM         => {}, # e.g., Module::Name => 1.1
+    PREREQ_PM         => {'Expect' => '1.14'}, # e.g., Module::Name => 1.1
     ($] >= 5.005 ?     ## Add these new keywords supported since 5.005
       (ABSTRACT_FROM  => 'lib/Net/SSH/Expect.pm', # retrieve abstract from module
-       AUTHOR         => 'brunonz@br.ibm.com LV5E7T631 NegrÃÂ£o GuimarÃÂ£es Zica <brunonz@suse.de>') : ()),
+       AUTHOR         => 'Bruno Negrao Guimaraes Zica, <bnegrao@cpan.org>') : ()),
 );
