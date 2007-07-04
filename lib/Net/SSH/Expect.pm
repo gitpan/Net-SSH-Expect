@@ -10,7 +10,7 @@ package Net::SSH::Expect;
 # CHANGES:
 #	2007/06/08 - creation.
 ########################################################
-use 5.008003;
+use 5.008000;
 use warnings;
 use strict;
 use fields qw(
@@ -23,7 +23,7 @@ use Expect;
 use Carp;
 use POSIX qw(:signal_h WNOHANG);
 
-our $VERSION = '0.05';
+our $VERSION = '0.06';
 
 # error contants
 use constant ILLEGAL_STATE => "IllegalState";
@@ -462,8 +462,6 @@ $block: 0 or 1. Blocks until remote_cmd returns. Default is 0.
 0: does not block until prompt goes back, waiting util C<timeout> seconds;  
 
 1: blocks waiting the prompt to return after running the $remote_cmd.
-
-=back
 
 =back
 
