@@ -1,29 +1,19 @@
 package Net::SSH::Expect;
-########################################################
-# Net::SSH::Expect.pm
-# 	Wrapper for ssh remote exec funtion, with the ability to send passwords via Expect.
-# AUTHOR: 
-#	Bruno Negrao - brunonz@br.ibm.com
-# NOTES:
-#	This module is inspired in  http://search.cpan.org/~djberg/Net-SCP-Expect-0.12/Expect.pm
-#	and some parts of the code was copied and pasted from the original. Thanks to Daniel Berger.
-# CHANGES:
-#	2007/06/08 - creation.
-########################################################
 use 5.008000;
 use warnings;
 use strict;
 use fields qw(
-	host user password verbose
+	host user password verbose_ssh
 	timeout error_handler
 	cipher port terminator protocol identity_file
-	log_file ssh_connection prompt
+	ssh_connection prompt log_file
+	log_stdout exp_internal debug
 );
 use Expect;
 use Carp;
 use POSIX qw(:signal_h WNOHANG);
 
-our $VERSION = '0.06';
+our $VERSION = '0.07';
 
 # error contants
 use constant ILLEGAL_STATE => "IllegalState";
@@ -44,7 +34,7 @@ sub new {
     $self->{host} 			= $args{host}|| undef;
     $self->{user}  			= $args{user} || $ENV{'USER'};
     $self->{password} 		= $args{password} || undef;
-	$self->{verbose}		= $args{verbose} || 0;
+	$self->{verbose_ssh}	= $args{verbose_ssh} || 0;
 	$self->{timeout}		= $args{timeout} || 10;
 	$self->{error_handler} 	= $args{error_handler} || undef;
 	$self->{cipher} 		= $args{cipher} || undef;
@@ -52,6 +42,9 @@ sub new {
 	$self->{terminator} 	= $args{terminator} || "\r";
 	$self->{identity_file}	= $args{identity_file} || undef;	 
 	$self->{log_file} 		= $args{log_file} || undef;
+	$self->{log_stdout}		= $args{log_stdout} || 0;
+	$self->{exp_internal}	= $args{exp_internal} || 0;
+	$self->{debug}			= $args{debug} || 0;
 	$self->{ssh_connection} = undef;
 	$self->{prompt}			= 'SSH_PROMPT>> '; # will set the PS1 env variable to this when connected 
 	return $self;
@@ -81,9 +74,12 @@ sub connect {
 	my $port = $self->{port};
 	my $terminator = $self->{terminator};
 	my $identity_file = $self->{identity_file};
-	my $verbose = $self->{verbose};
-	my $protocol = $self->{protocol};
+	my $verbose_ssh = $self->{verbose_ssh};
 	my $log_file = $self->{log_file};
+	my $log_stdout = $self->{log_stdout};
+	my $exp_internal = $self->{exp_internal};
+	my $debug = $self->{debug};
+	my $protocol = $self->{protocol};
 	my $prompt = $self->{prompt};
 	
 	croak(ILLEGAL_STATE . " field 'user' is not set.") unless $user;
@@ -95,18 +91,24 @@ sub connect {
 	
 	$flags .= "-c $cipher " if $cipher;
 	$flags .= "-P $port " if $port;
-	$flags .= "-v " if $verbose;
+	$flags .= "-v " if $verbose_ssh;
 	$flags .= "-$protocol " if $protocol;
 	$flags .= "-i $identity_file" if $identity_file;
 	
 	my $ssh_string = "ssh $flags $user\@$host";
-	my $ssh = Expect->spawn($ssh_string) or croak SSH_PROCESS_ERROR . " Couldn't start ssh: $!\n";
-	$ssh->log_stdout( $verbose ? 1 : 0  );
+	my $ssh = new Expect();
+	
+	$ssh->log_stdout($log_stdout);
 	$ssh->log_file($log_file, "w") if $log_file;
+	$ssh->exp_internal($exp_internal);
+	$ssh->debug($debug);
+	
+	$ssh->spawn($ssh_string) or croak SSH_PROCESS_ERROR . " Couldn't start ssh: $!\n";
 	
 	# saving this connection
 	$self->{ssh_connection} = $ssh; 
 	
+	# loggin in
 	$ssh->expect($timeout,
 		[ qr/\(yes\/no\)\?\s*$/ => sub { $ssh->send("yes$terminator"); exp_continue; } ],
 		[ qr/[Pp]assword.*?:|[Pp]assphrase.*?:/  => sub { $ssh->send("$password$terminator"); } ],
@@ -116,7 +118,8 @@ sub connect {
 		[ qr/REMOTE HOST IDEN/  => sub { print "FIX: .ssh/known_hosts\n"; exp_continue; } ],
 		[ eof					=> \&_connection_aborted ]
 	);
-	 
+	
+	# verifying if we failed to logon
 	$ssh->expect($timeout, 
 		[ qr/[Pp]assword.*?:|[Pp]assphrase.*?:/  => 			
 			sub { 
@@ -129,9 +132,12 @@ sub connect {
 			}
 		]);
 		
-	# setting the prompt
-	while ($ssh->expect($timeout, '-re', qr/.+/s)){
+	# SETTING THE REMOTE PROMPT ####################
+	while ($ssh->expect($timeout, '-re', qr/[\s\S]+/s)){
+		# First we swallow any output the SSH server put on the tty after the logon. This is
+		# usually the original remote prompt that we want to substitute.
 	}
+	# Remote prompt swallowed. Now we'll set the prompt we'll use:
 	my $change_prompt_cmd = "PS1='$prompt'";
 	$ssh->send("$change_prompt_cmd$terminator");
 	$ssh->expect($timeout,
@@ -360,10 +366,9 @@ the address(dns name/ip) to the ssh server
 the line terminator in use on the SSH server, this will added at the end of each command
 passed to the C<exec()> method. The default is C<\r>.
 
-=item B<verbose>
+=item B<verbose_ssh>
 
-Prints on the STDOUT all the conversation between this client and the SSH server.
-It also passes the option '-v' (verbose) to the wrapped ssh command, what will 
+This will pass the option '-v' (verbose) to the wrapped ssh command, what will 
 cause some ssh debugging messages to be displayed too. Useful for debugging.
 
 =item B<timeout>
@@ -392,9 +397,25 @@ Please see docs in Net::SCP::Expect to know how this option works.
 
 Please see docs in Net::SCP::Expect to know how this option works.
 
+=head2 CONSTRUCTOR OPTIONS THAT CONFIGURE THE INTERNAL EXPECT OBJECT
+
+The following constructor attributes can be used to configure special features of the internal Expect object used to communicate with the ssh server. These options will be passed to the Expect object inside the C<connect> method before it spawns the ssh process.
+
 =item B<log_file>
 
-Path to a file to save all the ssh conversation. Default is no log file.
+Used as argument to the internal Expect->log_file() method. Default is no logfile.
+
+=item B<log_stdout>
+
+Used as argument to the internal Expect->log_sdtout() method. Default is 0, to disable log to stdout.
+
+=item B<exp_internal>
+
+Argument to be passed to the internal Expect->exp_internal() method. Default is 0, to disable the internal exposure.
+
+=item B<debug>
+
+Argument to be passed to the internal Expect->debug() method. Default is 0, to disable debug.
 
 =back
 
@@ -525,7 +546,7 @@ Bruno Negrao Guimaraes Zica. E<lt>bnegrao@cpan.orgE<gt>.
 
 =head1 THANKS
 
-Daniel Berger, author of Net::SCP::Expect
+Daniel Berger, author of Net::SCP::Expect. Special thanks to the people helping me to improve this module by reporting their tests and the bugs they find.
 
 =head1 COPYRIGHT AND LICENSE
 

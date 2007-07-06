@@ -1,6 +1,22 @@
 Revision history for Perl extension Net::SSH::Expect.
 
+0.07 2007/07/06
+	- fixed the bug to set the remote prompt in the connect() method by putting the pattern
+	[\s\S]+ in the expect that swallows the remote prompt
+		while ($ssh->expect($timeout, '-re', qr/[\s\S]+/s)){
+				# First we swallow any output the SSH server put on the tty after the logon. This is
+				# usually the original remote prompt that we want to substitute.
+		}
+
+	- added the new constructor options that configure the Expect object:
+	exp_internal debug
+
+	- removed the 'verbose' attribute replacing it by two more specific attributes
+	verbose_ssh and log_stdout
+
 0.01  Tue Jun 26 15:27:49 2007
 	- original version; created by h2xs 1.23 with options
 		-XA -n Net::SSH::Expect
+
+
 
