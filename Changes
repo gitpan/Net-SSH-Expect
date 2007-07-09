@@ -1,5 +1,12 @@
 Revision history for Perl extension Net::SSH::Expect.
 
+0.08 2007/07/09
+	- fixed the RemotePromptUnavailable in the connect() method using a fix in the prompt pattern
+	The fix was found sent by titetluc@gmail.com, thanks.
+	- added the "collect exit code" feature.
+	- added the last_exit_code() and the collect_exit_code() methods.
+	- added the collect_exit_code and collected_exit_code attributes.
+
 0.07 2007/07/06
 	- fixed the bug to set the remote prompt in the connect() method by putting the pattern
 	[\s\S]+ in the expect that swallows the remote prompt

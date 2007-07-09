@@ -4,7 +4,7 @@ use warnings;
 use strict;
 use fields qw(
 	host user password verbose_ssh
-	timeout error_handler
+	timeout error_handler collect_exit_code collected_exit_code
 	cipher port terminator protocol identity_file
 	ssh_connection prompt log_file
 	log_stdout exp_internal debug
@@ -13,7 +13,7 @@ use Expect;
 use Carp;
 use POSIX qw(:signal_h WNOHANG);
 
-our $VERSION = '0.07';
+our $VERSION = '0.08';
 
 # error contants
 use constant ILLEGAL_STATE => "IllegalState";
@@ -34,6 +34,10 @@ sub new {
     $self->{host} 			= $args{host}|| undef;
     $self->{user}  			= $args{user} || $ENV{'USER'};
     $self->{password} 		= $args{password} || undef;
+	# tells if exec() has to collect the exit code of the last command run
+	$self->{collect_exit_code} 	= $args{collect_exit_code} || 0; 
+	# exec will store the exit code of the last command here
+	$self->{collected_exit_code} = undef;
 	$self->{verbose_ssh}	= $args{verbose_ssh} || 0;
 	$self->{timeout}		= $args{timeout} || 10;
 	$self->{error_handler} 	= $args{error_handler} || undef;
@@ -116,6 +120,7 @@ sub connect {
 		[ qr/ogin:\s*$/         => sub { $ssh->send("$user$terminator"); exp_continue; } ],
 		[ qr/$user$/			=> sub { $self->_retry ($user); return exp_continue; } ],
 		[ qr/REMOTE HOST IDEN/  => sub { print "FIX: .ssh/known_hosts\n"; exp_continue; } ],
+		[ qr/yes$/				=> sub { $self->_retry("yes"); exp_continue; }], 
 		[ eof					=> \&_connection_aborted ]
 	);
 	
@@ -141,8 +146,8 @@ sub connect {
 	my $change_prompt_cmd = "PS1='$prompt'";
 	$ssh->send("$change_prompt_cmd$terminator");
 	$ssh->expect($timeout,
-		[ qr/^$prompt$/ => 	sub { $ssh->send($terminator); } ],
-		[ qr/^$change_prompt_cmd$/	=> sub { $self->_retry ($change_prompt_cmd); return exp_continue; }	],
+		[ qr/$prompt$/ => 	sub { $ssh->send($terminator); } ],
+		[ qr/$change_prompt_cmd$/	=> sub { $self->_retry ($change_prompt_cmd); return exp_continue; }	],
 		[ timeout => sub { croak (REMOTE_PROMPT_UNAVAILABLE . 
 			": can't set the prompt with the command $change_prompt_cmd." ) ;} ],
 		[ eof => \&_connection_aborted]
@@ -192,6 +197,28 @@ sub exec() {
 								$cmd_output = $ssh->before();	
 								if (! defined $cmd_output || length($cmd_output) == 0 ) {
 									$cmd_output = "";
+								}
+								
+								# collect the exit code of the last command run
+								if ($self->{collect_exit_code}) {
+									my $echo_cmd = 'echo $?';
+									$ssh->send($echo_cmd . $terminator);
+									$ssh->expect($timeout,
+										[qr/$prompt$/ => 
+											sub { 
+												my $before = $ssh->before();
+												$before =~ /\d+/m;
+												my $code = $&;
+												$self->{collected_exit_code} = $code;
+											}
+										],
+										[qr/$echo_cmd/ => sub { $self->_retry($echo_cmd); }],
+										[timeout => sub {
+											croak (REMOTE_PROMPT_UNAVAILABLE .
+											" exec(): can't get the remote prompt after running '$echo_cmd'." );
+											}
+										]
+									);
 								}
 							}
 						],
@@ -251,23 +278,41 @@ sub _retry {
 	$ssh->send("$str$terminator");
 }
 
-# returns:
-#	digit: the exist status of the last command ran with exec()
-#	undef: if the last exist status could'n be obtained
-sub last_exit_status {
+# collect_exit_code( [ 0|1] ) : gets/sets the collect_exit_code feature
+# params:
+#	0: disables collection of exit codes by exec() - this is the default
+# 	1: enables collection of exit codes by exec().
+# returns: 
+#	boolean 0|1 : the current value of this setting. If you just set a new value, it'll return the new value.
+sub collect_exit_code {
 	my Net::SSH::Expect $self = shift;
-	my $stat = $self->exec("echo $?");
-	chomp ($stat);
-	return $stat;
+	my $arg = shift;
+	if (defined $arg) {
+		$self->{collect_exit_code} = $arg ? 1 : 0;
+	}
+	return $self->{collect_exit_code};
 }
 
-sub host{
+# returns:
+#	digit: the exit code of the last command ran with exec()
+# dies: 
+#	IllegalState if collect_exit_code()  != 1 or if this method was called before calling exec();
+sub last_exit_code {
+	my Net::SSH::Expect $self = shift;
+	croak (ILLEGAL_STATE .
+		" The collect_exit_code feature is disabled. To enable it run 'collect_exit_code(1)'.")
+			unless $self->collect_exit_code();
+	croak (ILLEGAL_STATE . " exec() wasn't run yet.") unless defined $self->{collected_exit_code};
+	return $self->{collected_exit_code};
+}
+
+sub host {
 	my Net::SSH::Expect $self = shift;
 	croak(ILLEGAL_ARGUMENT . " No host supplied to 'host()' method") unless @_;
 	$self->{host} = shift;
 }
 
-sub user{
+sub user {
 	my Net::SSH::Expect $self = shift;
 	croak(ILLEGAL_ARGUMENT . " No user supplied to 'user()' method") unless @_;
 	$self->{user} =shift;
@@ -312,8 +357,18 @@ Net::SSH::Expect - SSH wrapper to execute remote commands
 	my $ls = $ssh->exec("ls -l /");
 	print($ls);
 
+	# enables collection of the exit codes of the commands ran
+	$ssh->collect_exit_code(1);
+	
 	my $who = $ssh->exec("who");
 	print ($who);
+	
+	# shows the exit code of the last command ran
+	if ($ssh->last_exit_code() == 0) {
+		print ("Last command ran OK!\n");
+	} else {
+		print ("Last command failed and exited " . $ssh->last_exit_code());
+	}
 
 	# closes the ssh connection
 	$ssh->close();
@@ -360,6 +415,12 @@ the password used to login.
 =item B<host>
 
 the address(dns name/ip) to the ssh server
+
+=item B<collect_exit_code>
+
+boolean 0 or 1: disable/enable collection of the exit code of the last command run by exec(). 
+With this feature enabled C<exec()> will run a "echo $?" on the SSH server to collect the exit code of the last command ran. The exit code of the last command run can be get with the C<last_exit_code()> method.
+This feature is disabled by default.
 
 =item B<terminator>
 
@@ -496,11 +557,11 @@ string: a string containing all the output of the command ran. it can be a non r
 
 =item dies:
 
-IllegalState: if this there is no valid ssh connection established
+IllegalState: if this there is no valid ssh connection established.
 
 IllegalArgument: if no argument (no command string) is passed to this method.
 
-RemotePromptUnavailable: if the prompt is not available for execution of $remote_cmd
+RemotePromptUnavailable: if the prompt is not available for execution of $remote_cmd.
 
 =back
 
@@ -511,6 +572,36 @@ RemotePromptUnavailable: if the prompt is not available for execution of $remote
 =item returns:
 
 undef
+
+=back
+
+=item B<collect_exit_code( [0 or 1] )> get/set the collect_exit_code attribute.
+
+=over 4
+
+=item params:
+
+boolean 0 or 1: disable/enable collection of the exit code of the last command run by exec(). Default is 0 to disable this. The exit code of the last command run can be get with the C<last_exit_code()> method.
+
+none: changes nothing and returns the current setting.
+
+=item returns:
+
+boolean 0 or 1 : the current value of this setting. If you just set a new value, it'll return the new value.
+
+=back
+
+=item B<last_exit_code> - returns the exit code of the last command executed by C<exec()>.
+
+=over 4
+
+=item returns:
+
+integer: the exit code returned by the last command executed.
+
+=item dies:
+
+IllegalState: if C<collect_exit_code> is not set to 1 or if collect_exit_code is enabled but this method was called before calling exec();
 
 =back
 
