@@ -3,24 +3,21 @@ use 5.008000;
 use warnings;
 use strict;
 use fields qw(
-	host user password verbose_ssh
-	timeout error_handler collect_exit_code collected_exit_code
-	cipher port terminator protocol identity_file
-	ssh_connection prompt log_file
-	log_stdout exp_internal debug
+	host user password port no_ptty escape_char ssh_option
+	raw_pty exp_internal exp_debug log_file log_stdout
+	timeout terminator ssh_connection debug next_line
 );
 use Expect;
 use Carp;
 use POSIX qw(:signal_h WNOHANG);
 
-our $VERSION = '0.08';
+our $VERSION = '1.00';
 
 # error contants
 use constant ILLEGAL_STATE => "IllegalState";
 use constant ILLEGAL_STATE_NO_SSH_CONNECTION => "IllegalState: you don't have a valid SSH connection to the server";
 use constant ILLEGAL_ARGUMENT => "IllegalArgument";
 use constant SSH_AUTHENTICATION_ERROR => "SSHAuthenticationError";
-use constant REMOTE_PROMPT_UNAVAILABLE => "RemotePromptUnavailable"; 
 use constant SSH_PROCESS_ERROR => "SSHProcessError";
 use constant SSH_CONNECTION_ERROR => "SSHConnectionError";
 use constant SSH_CONNECTION_ABORTED => "SSHConnectionAborted";
@@ -31,60 +28,76 @@ sub new {
     my $type = shift;
 	my %args = @_;
     my Net::SSH::Expect $self = fields::new(ref $type || $type);
-    $self->{host} 			= $args{host}|| undef;
-    $self->{user}  			= $args{user} || $ENV{'USER'};
+	
+	# Options used to configure the SSH command
+    $self->{host} 			= $args{host}|| undef; 
+    $self->{user}  			= $args{user} || $ENV{'USER'}; 
     $self->{password} 		= $args{password} || undef;
-	# tells if exec() has to collect the exit code of the last command run
-	$self->{collect_exit_code} 	= $args{collect_exit_code} || 0; 
-	# exec will store the exit code of the last command here
-	$self->{collected_exit_code} = undef;
-	$self->{verbose_ssh}	= $args{verbose_ssh} || 0;
-	$self->{timeout}		= $args{timeout} || 10;
-	$self->{error_handler} 	= $args{error_handler} || undef;
-	$self->{cipher} 		= $args{cipher} || undef;
-	$self->{port}			= $args{port} || undef;
-	$self->{terminator} 	= $args{terminator} || "\r";
-	$self->{identity_file}	= $args{identity_file} || undef;	 
+	$self->{port}			= $args{port} || undef;			# ssh -p
+	$self->{no_ptty}		= $args{no_ptty} || 0; 			# ssh -T
+	$self->{escape_char}	= $args{escape_char} || undef; 	# ssh -e
+	$self->{ssh_option}		= $args{ssh_option} || undef;	# arbitrary ssh options
+	
+	# Options used to configure the Expect object
+	$self->{raw_pty}		= $args{raw_pty} || 0;
+	$self->{exp_internal}	= $args{exp_internal} || 0;
+	$self->{exp_debug}		= $args{exp_debug} || 0;
 	$self->{log_file} 		= $args{log_file} || undef;
 	$self->{log_stdout}		= $args{log_stdout} || 0;
-	$self->{exp_internal}	= $args{exp_internal} || 0;
-	$self->{debug}			= $args{debug} || 0;
+	
+	# Attributes for this module 
+	$self->timeout(defined $args{timeout} ? $args{timeout} : 1);
+	$self->{terminator} 	= $args{terminator} || "\n";
+	$self->{next_line}		= "";
 	$self->{ssh_connection} = undef;
-	$self->{prompt}			= 'SSH_PROMPT>> '; # will set the PS1 env variable to this when connected 
+	$self->{debug}			= $args{debug} || 0;
+
+	# validating the user input
+	foreach my $key (keys %args) {
+		if (! exists $self->{$key} ) {
+			croak ILLEGAL_ARGUMENT . " attribute '$key' is not a valid constructor argument.";
+		}
+	}
+
 	return $self;
 }
-
-
 
 sub _connection_aborted {
 	croak (SSH_CONNECTION_ABORTED);
 }
 
-# connect() - establishes an ssh connection with the ssh server
+# string login ([$test_success]) - authenticates on the ssh server. This should die if login fails.
+# param:
+#	boolean $test_success: 0 | 1. if 1, login will do an extra-text to verify if the password
+# 		entered was accepted. The test consists in verifying if, after sending the password,
+#		the "Password" prompt shows up again. This indicates the password was rejected.
+#		This test is disabled by default.
+# returns:
+#	string: whatever the SSH server wrote in my input stream after loging in. This usually is some
+#		welcome message and/or the remote prompt. You could use this string to do your verification
+#		that the login was successful. The content returned is removed from the input stream.
 # dies:
 #	IllegalState: if any of 'host' or 'user' or 'password' fields are unset.
-#	RemotePromptUnavailable: if the prompt on the remote machine can't be obtained after establishing the ssh connection
 #	SSHProccessError: if can't spawn the ssh process
 # 	SSHConnectionError: if the connection failed for some reason, like invalid 'host' address or network problems.
-sub connect {
+sub login {
     my Net::SSH::Expect $self = shift;
-	
+	my $test_success = @_ ? shift : 0;
+
 	my $user = $self->{user};
 	my $host = $self->{host};
 	my $password = $self->{password};
 	my $timeout = $self->{timeout};
-	my $handler = $self->{error_handler};
-	my $cipher = $self->{cipher};
 	my $port = $self->{port};
-	my $terminator = $self->{terminator};
-	my $identity_file = $self->{identity_file};
-	my $verbose_ssh = $self->{verbose_ssh};
+	my $t = $self->{terminator};
 	my $log_file = $self->{log_file};
 	my $log_stdout = $self->{log_stdout};
 	my $exp_internal = $self->{exp_internal};
-	my $debug = $self->{debug};
-	my $protocol = $self->{protocol};
-	my $prompt = $self->{prompt};
+	my $exp_debug = $self->{exp_debug};
+	my $no_ptty = $self->{no_ptty};
+	my $raw_pty = $self->{raw_pty};
+	my $escape_char = $self->{escape_char};
+	my $ssh_option = $self->{ssh_option};
 	
 	croak(ILLEGAL_STATE . " field 'user' is not set.") unless $user;
 	croak(ILLEGAL_STATE . " field 'password' is not set.") unless $password;
@@ -92,12 +105,10 @@ sub connect {
 	
 	# Gather flags.
 	my $flags = "";
-	
-	$flags .= "-c $cipher " if $cipher;
-	$flags .= "-P $port " if $port;
-	$flags .= "-v " if $verbose_ssh;
-	$flags .= "-$protocol " if $protocol;
-	$flags .= "-i $identity_file" if $identity_file;
+	$flags .= $escape_char ? "-e '$escape_char' " : "-e none ";
+	$flags .= "-p $port " if $port;
+	$flags .= "-T " if $no_ptty;
+	$flags .= $ssh_option if $ssh_option;
 	
 	my $ssh_string = "ssh $flags $user\@$host";
 	my $ssh = new Expect();
@@ -105,8 +116,9 @@ sub connect {
 	$ssh->log_stdout($log_stdout);
 	$ssh->log_file($log_file, "w") if $log_file;
 	$ssh->exp_internal($exp_internal);
-	$ssh->debug($debug);
-	
+	$ssh->debug($exp_debug);
+	$ssh->raw_pty($raw_pty);	
+	$ssh->restart_timeout_upon_receive(1);
 	$ssh->spawn($ssh_string) or croak SSH_PROCESS_ERROR . " Couldn't start ssh: $!\n";
 	
 	# saving this connection
@@ -114,142 +126,222 @@ sub connect {
 	
 	# loggin in
 	$ssh->expect($timeout,
-		[ qr/\(yes\/no\)\?\s*$/ => sub { $ssh->send("yes$terminator"); exp_continue; } ],
-		[ qr/[Pp]assword.*?:|[Pp]assphrase.*?:/  => sub { $ssh->send("$password$terminator"); } ],
+		[ qr/\(yes\/no\)\?\s*$/ => sub { $ssh->send("yes$t"); exp_continue; } ],
+		[ qr/[Pp]assword.*?:|[Pp]assphrase.*?:/  => sub { $ssh->send("$password$t"); } ],
 		[ qr/$password$/		=> sub { $self->_retry ($password); return exp_continue; } ],
-		[ qr/ogin:\s*$/         => sub { $ssh->send("$user$terminator"); exp_continue; } ],
+		[ qr/ogin:\s*$/         => sub { $ssh->send("$user$t"); exp_continue; } ],
 		[ qr/$user$/			=> sub { $self->_retry ($user); return exp_continue; } ],
 		[ qr/REMOTE HOST IDEN/  => sub { print "FIX: .ssh/known_hosts\n"; exp_continue; } ],
 		[ qr/yes$/				=> sub { $self->_retry("yes"); exp_continue; }], 
+		[ timeout				=> sub 
+			{ 
+				croak SSH_AUTHENTICATION_ERROR . " Login timed out. " .
+				"The input stream currently has the contents bellow: " .
+				$self->peek();
+			} 
+		],
 		[ eof					=> \&_connection_aborted ]
 	);
 	
 	# verifying if we failed to logon
-	$ssh->expect($timeout, 
-		[ qr/[Pp]assword.*?:|[Pp]assphrase.*?:/  => 			
-			sub { 
-				my $error = $ssh->before() || $ssh->match();
-				if($handler){
-					$handler->($error);
-				} else{
+	if ($test_success) {
+		$ssh->expect($timeout, 
+			[ qr/[Pp]assword.*?:|[Pp]assphrase.*?:/  => 			
+				sub { 
+					my $error = $ssh->before() || $ssh->match();
 					croak(SSH_AUTHENTICATION_ERROR . " Error: Bad password [$error]");
 				}
-			}
-		]);
-		
-	# SETTING THE REMOTE PROMPT ####################
-	while ($ssh->expect($timeout, '-re', qr/[\s\S]+/s)){
-		# First we swallow any output the SSH server put on the tty after the logon. This is
-		# usually the original remote prompt that we want to substitute.
+			]
+		);
 	}
-	# Remote prompt swallowed. Now we'll set the prompt we'll use:
-	my $change_prompt_cmd = "PS1='$prompt'";
-	$ssh->send("$change_prompt_cmd$terminator");
-	$ssh->expect($timeout,
-		[ qr/$prompt$/ => 	sub { $ssh->send($terminator); } ],
-		[ qr/$change_prompt_cmd$/	=> sub { $self->_retry ($change_prompt_cmd); return exp_continue; }	],
-		[ timeout => sub { croak (REMOTE_PROMPT_UNAVAILABLE . 
-			": can't set the prompt with the command $change_prompt_cmd." ) ;} ],
-		[ eof => \&_connection_aborted]
-	);
+
+   	# swallows any output the put in my input stream after loging in	
+	my $welcome_msg;
+	while ($ssh->expect($timeout, '-re', qr/[\s\S]+/)) {
+		$welcome_msg .= $ssh->match();
+	}
+
+	return $welcome_msg;
 }
 
-# exec($cmd_string [, $block])  - executes a command in the remote machine
-# params:
-#	cmd_string: the string with the command to be ran.
-#	block 0|1: 
-#		0 - does not block untill prompt goes back, waiting utill 'timeout' seconds; 
-#		1 - blocks waiting the prompt to return. 
-#		This argument is optional and can be omitted. Default is 0.
-# returns:
-#	undef: if after running 'cmd_string' and waiting for 'timeout' seconds the prompt still didn't return. This can happen if 
-#		'cmd_string' takes a long time to conclude.
-#	empty string: if the command sent doesn't have output,
-#	string: containing the output of the command ran. it can be a non readable character if this was the output.
-# dies:
-#	IllegalState: if this there is no valid ssh connection established
-#	IllegalArgument: if no argument (no command string) is passed to this method.
-#	RemotePromptUnavailable: if the prompt is not available for execution of 'cmd_string'
-sub exec() {
-    my Net::SSH::Expect $self = shift;
-	my $cmd = shift;
-	croak (ILLEGAL_ARGUMENT . " missing argument 'cmd_string'.") unless ($cmd);
-	
-	my $block = @_ ? shift : 0;
-	
-	my $ssh = $self->get_expect();
-	my $timeout = $self->{timeout};
-	my $terminator = $self->{terminator};
-	my $user = $self->{user};
-	my $prompt = $self->{prompt};
 
-	# blocking is enabled by passing 'undef' as timeout to expect, causing it to block until the matching string comes available again
-	$timeout = $block ? undef : $timeout;
-	
-	my $cmd_output = undef;
+# ($prematch, $match) = waitfor ($pattern [, $timeout])
+# This method reads until a pattern match or string is found in the input stream.
+# All the characters before and including the match are removed from the input stream.
+#
+# In a list context the characters before the match and the matched characters are returned 
+# in $prematch and $match. In a scalar context, the matched characters and all characters
+# before it are discarded and 1 is returned on success. On time-out, eof, or other failures,
+# for both list and scalar context, the error mode action is performed. See errmode().
+#
+#
+sub waitfor {
+	my Net::SSH::Expect $self = shift;
+	my $pattern = shift;
+	my $timeout = @_ ? shift : $self->{timeout};
+	my $ssh = $self->get_expect();
+
+	my $match = "";
+	my $pre_match = "";
 	$ssh->expect($timeout, 
-		[qr/$prompt$/ 	=> 
+		[qr/$pattern/ => 
 			sub {
-					$ssh->send($cmd . $terminator); 
-					$ssh->expect($timeout, 
-						[qr/$prompt$/ => 
-							sub {
-								$cmd_output = $ssh->before();	
-								if (! defined $cmd_output || length($cmd_output) == 0 ) {
-									$cmd_output = "";
-								}
-								
-								# collect the exit code of the last command run
-								if ($self->{collect_exit_code}) {
-									my $echo_cmd = 'echo $?';
-									$ssh->send($echo_cmd . $terminator);
-									$ssh->expect($timeout,
-										[qr/$prompt$/ => 
-											sub { 
-												my $before = $ssh->before();
-												$before =~ /\d+/m;
-												my $code = $&;
-												$self->{collected_exit_code} = $code;
-											}
-										],
-										[qr/$echo_cmd/ => sub { $self->_retry($echo_cmd); }],
-										[timeout => sub {
-											croak (REMOTE_PROMPT_UNAVAILABLE .
-											" exec(): can't get the remote prompt after running '$echo_cmd'." );
-											}
-										]
-									);
-								}
-							}
-						],
-                        [timeout    =>
-                            sub {
-	                            if ($ssh->expect($timeout, '-re', qr/$cmd$/)) {
-	                                 $self->_retry ($cmd); 
-									 return exp_continue;
-	                            } else { 
-	                                croak (REMOTE_PROMPT_UNAVAILABLE .
-	                                " exec(): can't get the remote prompt after running '$cmd'." );
-	                            }
-							}
-                        ],
-						[eof => \&_connection_aborted]
-					);
-			} 
+				$match = $ssh->match();
+				$pre_match = $ssh->before();
+			}
 		],
-		[timeout 	=> 
-			sub { 
-				croak (REMOTE_PROMPT_UNAVAILABLE . 
-				" exec(): can't execute command '$cmd' without the remote prompt available" );
-			} 
-		],
-		[eof => \&_connection_aborted]
+		[ eof => \&_connection_aborted ]
 	);
 	
-	# sending a "\r" to make the prompt be available again (for the next call of exec())
-	$ssh->send($terminator);
+	my $list_context = wantarray() ? 1 : 0;
+
+	if ($list_context) {
+		return ($pre_match, $match);
+	} else {
+		if ($match) {
+			return 1;
+		} else {
+			return 0;
+		}
+	}
+}
+
+# send ("string") - breaks on through to the other side.
+sub send {
+	my Net::SSH::Expect $self = shift;
+	my $send = shift;
+	croak (ILLEGAL_ARGUMENT . " missing argument 'string'.") unless ($send);
+	my $ssh = $self->get_expect();
+	my $t = $self->{terminator};
+	$ssh->send($send . $t);
+}
+
+# peek([$timeout]) - returns what is in the input stream without removing anything
+sub peek {
+	my Net::SSH::Expect $self = shift;
+	my $timeout = @_ ? shift : $self->{timeout};
+	my $ssh = $self->get_expect();
 	
-	return $cmd_output;
+	unless (defined $ssh->before() && $ssh->before() ne "") {
+		my ($pos, $error, $match, $before, $after) = $ssh->expect($timeout);
+		unless (defined $before && !($before eq "")) {
+			# validates that the SSH connection was not terminated yet
+			my $error_first_digit = substr($error, 0, 1);
+			if ($error_first_digit eq '2') {
+				croak (ILLEGAL_STATE_NO_SSH_CONNECTION);
+			} elsif ($error_first_digit eq '3') {
+				croak (SSH_PROCESS_ERROR . " The ssh process was terminated.");
+			}
+		}
+	}
+	return $ssh->before();
+}
+
+# string eat($string)- removes all the head of the input stream until $string inclusive.
+#	eat() will only be able	to remove the $string if it's currently present on the 
+#	input stream because eat() will wait 0 seconds before removing it.
+#
+#	Use it associated with peek to eat everything that appears on the input stream:
+#
+#	while ($chunk = $ssh->eat($ssh->peak())) {
+#		print $chunk;
+#	}
+#	
+#	Or use the readAll() method that does the above loop for you returning the accumulated
+#	result.
+#
+# param:
+#	string: a string currently available on the input stream. 
+#		If $string doesn't start in the head, all the content before $string will also
+#		be removed. 
+#
+#		If $string is undef or empty string it will be returned immediately as it.
+#	
+# returns:
+#	string: the removed content or empty string if there is nothing in the input stream.
+# 
+# debbuging features:
+#	The following warnings are printed to STDERR if $ssh->debug() == 1:
+#		eat() prints a warning is $string wasn't found in the head of the input stream.
+#		eat() prints a warning is $string was empty or undefined.
+#
+sub eat {
+	my Net::SSH::Expect $self = shift;
+	my $string = shift;
+	unless (defined $string && $string ne "") {
+		if ($self->{debug}) {
+			carp ("eat(): param \$string is undef or empty string\n");
+		}
+		return $string;
+	}
+
+	my $ssh = $self->get_expect();
+
+	# the top of the input stream that will be removed from there and
+	# returned to the user
+	my $top;
+
+	# eat $string from (hopefully) the head of the input stream
+	$ssh->expect(0, '-ex', $string);
+	$top .= $ssh->match();
+
+	# if before() returns any content, the $string passed is not in the beginning of the 
+	# input stream.
+	if (defined $ssh->before() && !($ssh->before() eq "") ) {
+		if ($self->{debug}) {
+			carp ("eat(): param \$string '$string' was found on the input stream ".
+				"after '". $ssh->before() . "'.");
+		}
+		$top = $ssh->before() . $top; 
+	}
+	return $top;
+}
+
+# string readAll([$timeout]) - reads and remove all the output from the input stream.
+# The reading/removing process will be interrupted after $timeout seconds of inactivity
+# on the input stream.
+sub readAll {
+	my Net::SSH::Expect $self = shift;
+	my $timeout = @_ ? shift : $self->{timeout};
+	my $ssh = $self->get_expect();
+	my $out;
+	my $chunk;
+	while ($chunk = $self->eat($self->peek($timeout))) {
+		$out .= $chunk;
+	}
+	return $out;
+}
+
+
+# boolean hasLine([$timeout]) - tells if there is one more line on the input stream
+sub hasLine {
+	my Net::SSH::Expect $self = shift;
+	my $timeout = @_ ? shift : $self->{timeout};
+	$self->{next_line} = $self->readLine($timeout);
+	return !($self->{next_line} eq "");
+}
+
+# string readLine([$timeout]) - reads the next line from the input stream
+sub readLine {
+	my Net::SSH::Expect $self = shift;
+	my $timeout = @_ ? shift : $self->{timeout};
+	my $line = $self->{next_line};
+	if ($line eq "") { 
+		my $nl;
+		($line, $nl) = $self->waitfor('\n', $timeout);
+	} else {
+		$self->{next_line} = "";
+	}
+	return $line;
+}
+
+# string exec($cmd [,$timeout]) - executes a command, returns the complete output
+sub exec {
+	my Net::SSH::Expect $self = shift;
+	my $cmd = shift;
+	my $timeout = @_ ? shift : $self->{timeout};
+	$self->send($cmd);
+	return $self->readAll($timeout);
 }
 
 sub close {
@@ -263,48 +355,18 @@ sub close {
 #	reference: the internal Expect object used to manage the ssh connection.
 sub get_expect {
 	my Net::SSH::Expect $self = shift;
-	my $ssh = defined ($self->{ssh_connection}) ? $self->{ssh_connection} : 
+	my $exp = defined ($self->{ssh_connection}) ? $self->{ssh_connection} : 
 		croak (ILLEGAL_STATE_NO_SSH_CONNECTION);
-	return $ssh;
+	return $exp;
 }
 
-# _retry ($string_to_resend);
-sub _retry {
-	my Net::SSH::Expect $self = shift;
-	my $str = shift;
-	my $ssh = $self->get_expect();
-	my $terminator = $self->{terminator};
-	$ssh->clear_accum();
-	$ssh->send("$str$terminator");
+sub reapChild {
+   do {} while waitpid(-1,WNOHANG) > 0;
 }
 
-# collect_exit_code( [ 0|1] ) : gets/sets the collect_exit_code feature
-# params:
-#	0: disables collection of exit codes by exec() - this is the default
-# 	1: enables collection of exit codes by exec().
-# returns: 
-#	boolean 0|1 : the current value of this setting. If you just set a new value, it'll return the new value.
-sub collect_exit_code {
-	my Net::SSH::Expect $self = shift;
-	my $arg = shift;
-	if (defined $arg) {
-		$self->{collect_exit_code} = $arg ? 1 : 0;
-	}
-	return $self->{collect_exit_code};
-}
-
-# returns:
-#	digit: the exit code of the last command ran with exec()
-# dies: 
-#	IllegalState if collect_exit_code()  != 1 or if this method was called before calling exec();
-sub last_exit_code {
-	my Net::SSH::Expect $self = shift;
-	croak (ILLEGAL_STATE .
-		" The collect_exit_code feature is disabled. To enable it run 'collect_exit_code(1)'.")
-			unless $self->collect_exit_code();
-	croak (ILLEGAL_STATE . " exec() wasn't run yet.") unless defined $self->{collected_exit_code};
-	return $self->{collected_exit_code};
-}
+#
+# Getter/Setter methods
+#
 
 sub host {
 	my Net::SSH::Expect $self = shift;
@@ -324,327 +386,40 @@ sub password{
 	$self->{password} = shift;
 }
 
-sub port{
+sub port {
 	my Net::SSH::Expect $self = shift;
 	croak(ILLEGAL_ARGUMENT . " No value passed to 'port()' method") unless @_;
 	my $port = shift;
 	croak (ILLEGAL_ARGUMENT . " Passed number '$port' is not a valid port number") 
-		if ($port != /^[+-]?\d+$/ || $port < 1 || $port > 65535);
+		if ($port !~ /\A\d+\z/ || $port < 1 || $port > 65535);
 	$self->{port} = $port;
 }
 
-sub reapChild{
-   do {} while waitpid(-1,WNOHANG) > 0;
+# boolean debug([0|1]) - gets/sets the $ssh->{debug} attribute.
+sub debug {
+	my Net::SSH::Expect $self = shift;
+	if (@_) {
+		$self->{debug} = shift;
+	}
+	return $self->{debug};
 }
+
+# number timeout([$number]) - get/set the default timeout used for every method 
+# that reads data from the input stream. 
+# The only exception is eat() that has its timeout defined as 0.
+sub timeout {
+	my Net::SSH::Expect $self = shift;
+	if (! @_ ) {
+		return $self->{timeout};
+	}
+	my $timeout = shift;
+	if ( $timeout !~ /\A\d+\z/ || $timeout < 0) {
+		croak (ILLEGAL_ARGUMENT . " timeout '$timeout' is not a positive number.");
+	}
+	$self->{timeout} = $timeout;
+}
+
+
 1;
 
-=head1 NAME
 
-Net::SSH::Expect - SSH wrapper to execute remote commands
-
-=head1 SYNOPSIS
-
-	use Net::SSH::Expect;
-
-	# configures the ssh connection and authentication
-	my $ssh = Net::SSH::Expect->new (host => "myserver.com", password=> 'pass87word', user => 'bnegrao');
-
-	# establishes the ssh connection, 
-	# authenticating with that user and password
-	$ssh->connect();
-
-	# runs arbitrary commands
-	my $ls = $ssh->exec("ls -l /");
-	print($ls);
-
-	# enables collection of the exit codes of the commands ran
-	$ssh->collect_exit_code(1);
-	
-	my $who = $ssh->exec("who");
-	print ($who);
-	
-	# shows the exit code of the last command ran
-	if ($ssh->last_exit_code() == 0) {
-		print ("Last command ran OK!\n");
-	} else {
-		print ("Last command failed and exited " . $ssh->last_exit_code());
-	}
-
-	# closes the ssh connection
-	$ssh->close();
-
-=head1 DESCRIPTION
-
-This module is a wrapper to the I<ssh> executable that is available in your system's I<$PATH>.
-Use this module to execute commands on the remote SSH server.
-It authenticates with the user and password you passed in the constructor's attributes
-C<user> and C<password>.
-
-Once an ssh connection was started using the C<connect()> method it will remain open
-until you call the C<close()> method. This allows you execute how many commands you want
-with the C<exec()> method using only one connection. This is a better approach over other 
-ssh wrapper implementations, i.e: Net::SCP, Net::SSH and Net::SCP::Expect, that start a new
-ssh connection each time a remote command is issued or a file is transfered.
-
-It uses I<Expect.pm> module to interact with the SSH server. A C<get_expect()> method is 
-provided so you can obtain the internal C<Expect> object connected to the SSH server. Use 
-this only if you have some special need that you can't do with the C<exec()> method.
-
-This module was inspired by Net::SCP::Expect L<http://search.cpan.org/~djberg/Net-SCP-Expect-0.12/Expect.pm>
-was designed to be its counterpart. Their API's are very similar, and sometimes identical.
-I'll refer to the documentation of Net::SCP::Expect anytime their functionality is the same.
-
-=head2 EXPORT
-
-None by default.
-
-=head1 CONSTRUCTOR ATTRIBUTES
-
-The constructor accepts all the following attributes that can be set in the form of attribute => 'value' pairs.
-
-=over 4
-
-=item B<user>
-
-the username to login.
-
-=item B<password>
-
-the password used to login.
-
-=item B<host>
-
-the address(dns name/ip) to the ssh server
-
-=item B<collect_exit_code>
-
-boolean 0 or 1: disable/enable collection of the exit code of the last command run by exec(). 
-With this feature enabled C<exec()> will run a "echo $?" on the SSH server to collect the exit code of the last command ran. The exit code of the last command run can be get with the C<last_exit_code()> method.
-This feature is disabled by default.
-
-=item B<terminator>
-
-the line terminator in use on the SSH server, this will added at the end of each command
-passed to the C<exec()> method. The default is C<\r>.
-
-=item B<verbose_ssh>
-
-This will pass the option '-v' (verbose) to the wrapped ssh command, what will 
-cause some ssh debugging messages to be displayed too. Useful for debugging.
-
-=item B<timeout>
-
-The maximum time in seconds to wait for a command to return to the PROMPT. The default is 10 seconds.
-Remember to increase this attribute with the C<timeout()> method before you run a command that 
-takes a long time to return.
-
-=item B<error_handler>
-
-Please see docs in Net::SCP::Expect to know how this option works.
-
-=item B<cipher>
-
-Please see docs in Net::SCP::Expect to know how this option works.
-
-=item B<port>
-
-alternate ssh port. default is 22.
-
-=item B<protocol>
-
-Please see docs in Net::SCP::Expect to know how this option works.
-
-=item B<identity_file>
-
-Please see docs in Net::SCP::Expect to know how this option works.
-
-=head2 CONSTRUCTOR OPTIONS THAT CONFIGURE THE INTERNAL EXPECT OBJECT
-
-The following constructor attributes can be used to configure special features of the internal Expect object used to communicate with the ssh server. These options will be passed to the Expect object inside the C<connect> method before it spawns the ssh process.
-
-=item B<log_file>
-
-Used as argument to the internal Expect->log_file() method. Default is no logfile.
-
-=item B<log_stdout>
-
-Used as argument to the internal Expect->log_sdtout() method. Default is 0, to disable log to stdout.
-
-=item B<exp_internal>
-
-Argument to be passed to the internal Expect->exp_internal() method. Default is 0, to disable the internal exposure.
-
-=item B<debug>
-
-Argument to be passed to the internal Expect->debug() method. Default is 0, to disable debug.
-
-=back
-
-=head1 METHODS
-
-=over 4
-
-=item B<connect()> - establishes an ssh connection with the ssh server
-
-This method will use the values set in C<user> and C<password> to authenticate to the 
-SSH server identified by C<host>.
-
-If it connects and authenticates successfully its first step will be trying to set
-the prompt in the remote machine to 'I<SSH_PROMPT>E<gt>E<gt>I< >' by sending a command
-that changes the value of the I<$PS1> environment variable, what should replace the 
-unknown remote prompt to this well know string.
-
-C<connect()> only returns after it sets the remote prompt successfully, it will die 
-otherwise.
-
-Setting the remote prompt to this constant, well-known string is important to the 
-functioning of C<exec()>. That method will know that the command it ran finished the
-execution when it sees the prompt string, 'I<SSH_PROMPT>E<gt>E<gt>I< >', appearing again.
-
-=over 4
-
-=item params:
-
-none
-
-=item returns:
-
-undef
-
-=item dies:
-
-IllegalState: if any of 'host' or 'user' or 'password' fields are unset.
-
-RemotePromptUnavailable: if the prompt on the remote machine can't be obtained after establishing the ssh connection
-
-SSHProccessError: if can't spawn the ssh process
-
-SSHConnectionError: if the connection failed for some reason, like invalid 'host' address or network problems.
-
-=back
-
-=item B<exec($remote_cmd [, $block])> - executes a command in the remote machine
-
-This method will try to execute the $remote_cmd on the SSH server and return the command's output. 
-C<exec()> knows that $remote_cmd finished its execution on the remote machine when the remote prompt
-string is received after the command was sent.
-
-See C<connect()> to read info on what the remote prompt string looks like.
-
-=over 4
-
-=item params:
-
-$remote_cmd: a string with the command line to be run in the remote server.
-
-$block: 0 or 1. Blocks until remote_cmd returns. Default is 0.
-
-=over 4
-
-0: does not block until prompt goes back, waiting util C<timeout> seconds;  
-
-1: blocks waiting the prompt to return after running the $remote_cmd.
-
-=back
-
-=item returns:
-
-undef: if after running 'cmd_string' and waiting for 'timeout' seconds the prompt still didn't return. This can happen if  'cmd_string' takes a long time to conclude.
-
-empty string: if the command sent doesn't have output.
-
-string: a string containing all the output of the command ran. it can be a non readable character if this was the output. This can be memory intensive depending on the size of the output.
-
-=item dies:
-
-IllegalState: if this there is no valid ssh connection established.
-
-IllegalArgument: if no argument (no command string) is passed to this method.
-
-RemotePromptUnavailable: if the prompt is not available for execution of $remote_cmd.
-
-=back
-
-=item B<close()> - terminates the ssh connection
-
-=over 4
-
-=item returns:
-
-undef
-
-=back
-
-=item B<collect_exit_code( [0 or 1] )> get/set the collect_exit_code attribute.
-
-=over 4
-
-=item params:
-
-boolean 0 or 1: disable/enable collection of the exit code of the last command run by exec(). Default is 0 to disable this. The exit code of the last command run can be get with the C<last_exit_code()> method.
-
-none: changes nothing and returns the current setting.
-
-=item returns:
-
-boolean 0 or 1 : the current value of this setting. If you just set a new value, it'll return the new value.
-
-=back
-
-=item B<last_exit_code> - returns the exit code of the last command executed by C<exec()>.
-
-=over 4
-
-=item returns:
-
-integer: the exit code returned by the last command executed.
-
-=item dies:
-
-IllegalState: if C<collect_exit_code> is not set to 1 or if collect_exit_code is enabled but this method was called before calling exec();
-
-=back
-
-=item B<get_expect()> - returns a connected Expect object
-
-=over 4
-
-=item params:
-
-none
-
-=item returns:
-
-an C<Expect> object connected to the SSH server. It will die if you try to run it without being connected.
-
-=item dies:
-
-IllegalState: if this there is no valid ssh connection established
-
-=back
-
-=head1 SEE ALSO
-
-Net::SCP::Expect, Net::SCP, Net::SSH::Perl, L<Expect>
-
-=head1 REPORT YOUR TESTS TO ME, PLEASE
-
-Please email me if you had problems of successes using my module. This way I can, one day, flag this module as "mature" in the modules database.
-
-=head1 AUTHOR
-
-Bruno Negrao Guimaraes Zica. E<lt>bnegrao@cpan.orgE<gt>.
-
-=head1 THANKS
-
-Daniel Berger, author of Net::SCP::Expect. Special thanks to the people helping me to improve this module by reporting their tests and the bugs they find.
-
-=head1 COPYRIGHT AND LICENSE
-
-Copyright (C) 2007 by Bruno Negrao Guimaraes Zica
-
-This library is free software; you can redistribute it and/or modify
-it under the same terms as Perl itself, either Perl version 5.8.3 or,
-at your option, any later version of Perl 5 you may have available.
-
-=cut

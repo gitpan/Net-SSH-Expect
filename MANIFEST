@@ -4,4 +4,5 @@ MANIFEST
 README
 t/Net-SSH-Expect.t
 lib/Net/SSH/Expect.pm
+lib/Net/SSH/Expect.pod
 META.yml                                 Module meta-data (added by MakeMaker)
