@@ -149,12 +149,12 @@ They are presentend in three groups:
 2) attributes to configure the underlying Expect object;
 3) attributes to configure this module;
 
-=over 4
-
 =head2 ATTRIBUTES TO CONFIGURE THE SSH CLIENT PROCESS
 
 Some of the attributes bellow will enable/disable some options of the ssh client. Refer to you ssh client documentation
 to know what each one does.
+
+=over 4
 
 =item String B<user>
 
@@ -222,6 +222,8 @@ Default is 0 to let the local ptty as its defaults.
 
 =head2 CONSTRUCTOR OPTIONS TO CONFIGURE THIS MODULE
 
+=over 4
+
 =item B<terminator>
 
 the line terminator in use on the SSH server, this will added at the end of each command
@@ -238,30 +240,36 @@ takes a long time to return.
 Causes some methods to print debug messages to the STDERR. This feature is not widely implemented yet. 
 (only eat() implements it until this moment)
 
+=back
+
 =head1 METHODS
 
 =over 4
 
 =item B<login($test_success)> 
-    # string login ([$test_success]) - authenticates on the ssh server. This should die if login fails.
-    # param:
-    #	boolean $test_success: 0 | 1. if 1, login willdo an extra-text to verify if the password
-    # 		entered was accepted. The test consists in verifying if, after sending the password,
-    #		the "Password" prompt shows up again. This indicates the password was rejected.
-    #		This test is disabled by default.
-    # returns:
-    #	string: whatever the SSH server wrote in my input stream after loging in. This usually is some
-    #		welcome message and/or the remote prompt. You could use this string to do your verification
-    #		that the login was successful. The content returned is removed from the input stream.
-    # dies:
-    #	IllegalState: if any of 'host' or 'user' or 'password' fields are unset.
-    #	SSHProccessError: if can't spawn the ssh process
-    # 	SSHConnectionError: if the connection failed for some reason, 
-    #			    like invalid 'host' address or network problems.
+
+	# string login ([$test_success]) - authenticates on the ssh server. This should die if login fails.
+	# param:
+	#	boolean $test_success: 0 | 1. if 1, login willdo an extra-text to verify if the password
+	# 		entered was accepted. The test consists in verifying if, after sending the password,
+	#		the "Password" prompt shows up again. This indicates the password was rejected.
+	#		This test is disabled by default.
+	# returns:
+	#	string: whatever the SSH server wrote in my input stream after loging in. This usually is some
+	#		welcome message and/or the remote prompt. You could use this string to do your verification
+	#		that the login was successful. The content returned is removed from the input stream.
+	# dies:
+	#	IllegalState: if any of 'host' or 'user' or 'password' fields are unset.
+	#	SSHProccessError: if can't spawn the ssh process
+	# 	SSHConnectionError: if the connection failed for some reason, 
+	#			    like invalid 'host' address or network problems.
 
 =item B<exec($cmd [,$timeout])> - executes a command in the remote machine returning its output
 
+TODO: fill the documentation
+
 =item B<waitfor($pattern [,$timeout])>
+
     # ($prematch, $match) = waitfor ($pattern [, $timeout])
     # This method reads until a pattern match or string is found in the input stream.
     # All the characters before and including the match are removed from the input stream.
@@ -275,52 +283,75 @@ Causes some methods to print debug messages to the STDERR. This feature is not w
 
 =item B<close()> - terminates the ssh connection
 
+TODO: fill the documentation
+
 =item B<send($string)> - sends $string to the SSH server, returns nothing
+
+TODO: fill the documentation
 
 =item B<peek([$timeout])> - returns what is in the input stream without removing anything
 
+TODO: fill the documentation
+
 =item B<eat($string)> - removes all the head of the input stream until $string inclusive.
-    #	eat() will only be able	to remove the $string if it's currently present on the 
-    #	input stream because eat() will wait 0 seconds before removing it.
-    #
-    #	Use it associated with peek to eat everything that appears on the input stream:
-    #
-    #	while ($chunk = $ssh->eat($ssh->peak())) {
-    #		print $chunk;
-    #	}
-    #	
-    #	Or use the readAll() method that does the above loop for you returning the accumulated
-    #	result.
-    #
-    # param:
-    #	string: a string currently available on the input stream. 
-    #		If $string doesn't start in the head, all the content before $string will also
-    #		be removed. 
-    #
-    #		If $string is undef or empty string it will be returned immediately as it.
-    #	
-    # returns:
-    #	string: the removed content or empty string if there is nothing in the input stream.
-    # 
-    # debbuging features:
-    #	The following warnings are printed to STDERR if $ssh->debug() == 1:
-    #		eat() prints a warning is $string wasn't found in the head of the input stream.
-    #		eat() prints a warning is $string was empty or undefined.
-    #
+
+eat() will only be able	to remove the $string if it's currently present on the 
+input stream because eat() will wait 0 seconds before removing it.
+
+Use it associated with peek to eat everything that appears on the input stream:
+
+	while ($chunk = $ssh->eat($ssh->peak())) {
+		print $chunk;
+	}
+
+Or use the readAll() method that does the above loop for you returning the accumulated
+result.
+
+=over 4
+
+=item params:
+
+string: a string currently available on the input stream. 
+If $string doesn't start in the head, all the content before $string will also
+be removed. 
+
+If $string is undef or empty string it will be returned immediately as it.
+
+=item returns:
+
+string: the removed content or empty string if there is nothing in the input stream.
+
+=item debbuging features:
+
+The following warnings are printed to STDERR if $ssh->debug() == 1:
+
+=over 4
+
+* eat() prints a warning is $string wasn't found in the head of the input stream.
+
+* eat() prints a warning is $string was empty or undefined.
+
+=back
+
+=back
 
 =item B<readAll([$timeout])> - reads and removes all the output from the input stream.
 
 The reading/removing process will be interrupted after $timeout seconds of inactivity
 on the input stream.
-
-=item B<get_expect()> - returns a connected Expect object
+TODO: fill the documentation
 
 =item B<hasLine([$timeout])> - tells if there is one more line on the input stream.
+
 Does not remove the line read.
+TODO: fill the documentation
 
 =item B<readLine([$timeout])> - reads the next line from the input stream and returns it. 
-The line read is removed from the input stream.
 
+The line read is removed from the input stream.
+TODO: fill the documentation
+
+=item B<get_expect()> - returns a connected Expect object
 
 =over 4
 
@@ -335,6 +366,8 @@ an C<Expect> object connected to the SSH server. It will die if you try to run i
 =item dies:
 
 IllegalState: if this there is no valid ssh connection established
+
+=back
 
 =back
 

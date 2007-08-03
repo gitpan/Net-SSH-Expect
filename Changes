@@ -1,5 +1,8 @@
 Revision history for Perl extension Net::SSH::Expect.
 
+1.01 2007/08/03
+	- Documentation improvement.
+
 1.00 2007/08/02
 	- Implementing a total new API. Many old methods dissapeared and new methods appeared.
 	Some methods were kept but were rewritten.
