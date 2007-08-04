@@ -6,7 +6,12 @@ Net::SSH::Expect - SSH wrapper to execute remote commands
 
 	use Net::SSH::Expect;
 
-	# configures the ssh connection and authentication
+	#
+	# You can do SSH authentication with user-password or without it.
+	#
+
+	# Making an ssh connection with user-password authentication
+	# 1) construct the object
 	my $ssh = Net::SSH::Expect->new (
 	    host => "myserver.com", 
 	    password=> 'pass87word', 
@@ -14,12 +19,29 @@ Net::SSH::Expect - SSH wrapper to execute remote commands
 	    raw_pty => 1
 	);
 
-	# logon to the SSH server using those credentials.
+	# 2) logon to the SSH server using those credentials.
 	# test the login output to make sure we had success
 	my $login_output = $ssh->login();
 	if ($login_output !~ /Welcome/) {
 	    die "Login has failed. Login output was $login_output";
 	}
+	
+	# - now you know you're logged in - #
+
+	# Starting ssh without password
+	# 1) run the constructor
+	my $ssh = Net::SSH::Expect->new (
+	    host => "myserver.com", 
+	    user => 'bnegrao', 
+	    raw_pty => 1
+	);
+	# 2) now start the ssh process
+	$ssh->run_ssh() or die "SSH process couldn't start: $!";
+	
+	# 3) you should be logged on now. Test if you received the remote prompt:
+	($ssh->read_all(2) =~ />\s*\z/) or die "where's the remote prompt?"
+
+	# - now you know you're logged in - #
 
 	# disable terminal translations and echo on the SSH server
 	# executing on the server the stty command:
@@ -36,15 +58,15 @@ Net::SSH::Expect - SSH wrapper to execute remote commands
 	# When running a command that causes a huge output,
 	# lets get the output line by line:
 	$ssh->send("find /");   # using send() instead of exec()
-  	while ( $ssh->hasLine() ) {
+  	while ( $ssh->has_line() ) {
 	    # returns the next line, removing it from the input stream:
-	    print $ssh->readLine() . "\n";  
+	    print $ssh->read_line() . "\n";  
 	}
 
 	# take a look in what is immediately available on the input stream
 	print $ssh->peek(0);	# you'll probably see the remote prompt
  
-	# the last readLine() on the previous loop will not include the
+	# the last read_line() on the previous loop will not include the
 	# remote prompt that appears at the end of the output, because the prompt
 	# doesn't end with a '\n' character. So let's remove the remainder
 	# prompt from the input stream:
@@ -224,18 +246,19 @@ Default is 0 to let the local ptty as its defaults.
 
 =over 4
 
-=item B<terminator>
+=item String B<terminator>
 
 the line terminator in use on the SSH server, this will added at the end of each command
 passed to the C<exec()> method. The default is C<\n>.
 
-=item B<timeout>
+=item Integer B<timeout>
 
-The maximum time in seconds to wait for a command to return to the PROMPT. The default is 10 seconds.
-Remember to increase this attribute with the C<timeout()> method before you run a command that 
-takes a long time to return.
+The maximum time to wait for a pattern to show up on input stream before giving up
+in a read operation. The default is 1 second.
 
-=item B<debug>
+This attribute can also be get/set with the C<timeout()> method.
+
+=item Boolean B<debug>
 
 Causes some methods to print debug messages to the STDERR. This feature is not widely implemented yet. 
 (only eat() implements it until this moment)
@@ -246,13 +269,30 @@ Causes some methods to print debug messages to the STDERR. This feature is not w
 
 =over 4
 
-=item B<login($test_success)> 
+=item boolean B<run_ssh()> - forks the ssh client process
 
-	# string login ([$test_success]) - authenticates on the ssh server. This should die if login fails.
+	# boolean run_ssh() - forks the ssh client process
+	#	This method has three roles:
+	#	1) 	Instantiate a new Expect object configuring it with all the defaults and user-defined
+	#		settings.
+	#	2)	Define the ssh command line using the defaults and user-defined settings
+	#	3)	Fork the ssh process using the spawn() method of the Expect instance we created.
+	#		
+	# returns:
+	#	boolean: 1 if the ssh ran OK or 0 otherwise. In case of failures, use $! to do get info
+
+
+=item String B<login($test_success)>  - authenticates on the ssh server. 
+
+	# string login ([$test_success]) - authenticates on the ssh server. 
+	#	This method responds to the authentication prompt sent by the SSH server.
+	#	It runs the run_ssh() method only if it wasn't run before(), but it'll die
+	#	if run_ssh() returns false.
+	#
 	# param:
-	#	boolean $test_success: 0 | 1. if 1, login willdo an extra-text to verify if the password
+	#	boolean $test_success: 0 | 1. if 1, login will do an extra-text to verify if the password
 	# 		entered was accepted. The test consists in verifying if, after sending the password,
-	#		the "Password" prompt shows up again. This indicates the password was rejected.
+	#		the "Password" prompt shows up again what would indicate that the password was rejected.
 	#		This test is disabled by default.
 	# returns:
 	#	string: whatever the SSH server wrote in my input stream after loging in. This usually is some
@@ -260,9 +300,9 @@ Causes some methods to print debug messages to the STDERR. This feature is not w
 	#		that the login was successful. The content returned is removed from the input stream.
 	# dies:
 	#	IllegalState: if any of 'host' or 'user' or 'password' fields are unset.
-	#	SSHProccessError: if can't spawn the ssh process
-	# 	SSHConnectionError: if the connection failed for some reason, 
-	#			    like invalid 'host' address or network problems.
+	#	SSHProccessError: if run_ssh() failed to spawn the ssh process
+	# 	SSHConnectionError: if the connection failed for some reason, like invalid 'host' address or network problems.
+
 
 =item B<exec($cmd [,$timeout])> - executes a command in the remote machine returning its output
 
@@ -270,16 +310,47 @@ TODO: fill the documentation
 
 =item B<waitfor($pattern [,$timeout])>
 
-    # ($prematch, $match) = waitfor ($pattern [, $timeout])
-    # This method reads until a pattern match or string is found in the input stream.
-    # All the characters before and including the match are removed from the input stream.
-    #
-    # In a list context the characters before the match and the matched characters are returned 
-    # in $prematch and $match. In a scalar context, the matched characters and all characters
-    # before it are discarded and 1 is returned on success. On time-out, eof, or other failures,
-    # for both list and scalar context, the error mode action is performed. See errmode().
-    #
-    #
+	# boolean waitfor ($string [, $timeout, $match_type])
+	# This method reads until a pattern or string is found in the input stream.
+	# All the characters before and including the match are removed from the input stream.
+	# 
+	# After waitfor returns, use the methods before(), match() and after() to get the data
+	# 'before the match', 'what matched', and 'after the match' respectively.
+	#
+	# If waitfor returns false, whatever content is on input stream can be accessed with 
+	# before(). In this case before() will return the same content as peek(). 
+	#
+	# params:
+	#	$string: a string to be matched. It can be a regular expression or a literal string
+	#			 anb its interpretation as one or other depends on $match_type. Default is
+	#			 're', what treats $string as a regular expression.
+	#
+	#	$timeout: the timeout in seconds while waiting for $string
+	#
+	#	$match_type: match_type affects how $string will be matched:
+	#		'-re': means $string is a regular expression.
+	#		'-ex': means $string is an "exact match", i.e., will be matched literally.
+	#
+	# returns: 
+	#	boolean: 1 is returned if string was found, 0 otherwise. When the match fails
+	#			 waitfor() will only return after waiting $timeout seconds.
+	#
+	# dies:
+	#	SSH_CONNECTION_ABORTED if EOF is found (error type 2)
+	#	SSH_PROCESS_ERROR if the ssh process has died (error type 3)
+	#	SSH_CONNECTION_ERROR if unknown error (type 4) is found
+
+=item string B<before()> - returns the "before match" data of the last waitfor() call, or empty string.
+
+TODO: fill the documentation
+
+=item string B<match()> - returns the "match" data of the last waitfor() call, or empty string.
+
+TODO: fill the documentation
+
+=item string B<after()> - returns the "after match" data of the last waitfor() call, or empty string.
+
+TODO: fill the documentation
 
 =item B<close()> - terminates the ssh connection
 
@@ -291,62 +362,62 @@ TODO: fill the documentation
 
 =item B<peek([$timeout])> - returns what is in the input stream without removing anything
 
+	# peek([$timeout]) - returns what is in the input stream without removing anything
+	# dies:
+	#	SSH_CONNECTION_ABORTED if EOF is found (error type 2)
+	#	SSH_PROCESS_ERROR if the ssh process has died (error type 3)
+	#	SSH_CONNECTION_ERROR if unknown error (type 4) is found
+
 TODO: fill the documentation
 
 =item B<eat($string)> - removes all the head of the input stream until $string inclusive.
 
-eat() will only be able	to remove the $string if it's currently present on the 
-input stream because eat() will wait 0 seconds before removing it.
+	# string eat($string)- removes all the head of the input stream until $string inclusive.
+	#	eat() will only be able	to remove the $string if it's currently present on the 
+	#	input stream because eat() will wait 0 seconds before removing it.
+	#
+	#	Use it associated with peek to eat everything that appears on the input stream:
+	#
+	#	while ($chunk = $exp->eat($exp->peak())) {
+	#		print $chunk;
+	#	}
+	#	
+	#	Or use the read_all() method that does the above loop for you returning the accumulated
+	#	result.
+	#
+	# param:
+	#	string: a string currently available on the input stream. 
+	#		If $string doesn't start in the head, all the content before $string will also
+	#		be removed. 
+	#
+	#		If $string is undef or empty string it will be returned immediately as it.
+	#	
+	# returns:
+	#	string: the removed content or empty string if there is nothing in the input stream.
+	# 
+	# dies:
+	#	SSH_CONNECTION_ABORTED if EOF is found (error type 2)
+	#	SSH_PROCESS_ERROR if the ssh process has died (error type 3)
+	#	SSH_CONNECTION_ERROR if unknown error (type 4) is found
+	#
+	# debbuging features:
+	#	The following warnings are printed to STDERR if $exp->debug() == 1:
+	#		eat() prints a warning is $string wasn't found in the head of the input stream.
+	#		eat() prints a warning is $string was empty or undefined.
+	#
 
-Use it associated with peek to eat everything that appears on the input stream:
-
-	while ($chunk = $ssh->eat($ssh->peak())) {
-		print $chunk;
-	}
-
-Or use the readAll() method that does the above loop for you returning the accumulated
-result.
-
-=over 4
-
-=item params:
-
-string: a string currently available on the input stream. 
-If $string doesn't start in the head, all the content before $string will also
-be removed. 
-
-If $string is undef or empty string it will be returned immediately as it.
-
-=item returns:
-
-string: the removed content or empty string if there is nothing in the input stream.
-
-=item debbuging features:
-
-The following warnings are printed to STDERR if $ssh->debug() == 1:
-
-=over 4
-
-* eat() prints a warning is $string wasn't found in the head of the input stream.
-
-* eat() prints a warning is $string was empty or undefined.
-
-=back
-
-=back
-
-=item B<readAll([$timeout])> - reads and removes all the output from the input stream.
+=item B<read_all([$timeout])> - reads and removes all the output from the input stream.
 
 The reading/removing process will be interrupted after $timeout seconds of inactivity
 on the input stream.
 TODO: fill the documentation
 
-=item B<hasLine([$timeout])> - tells if there is one more line on the input stream.
+=item B<has_line([$timeout])> - tells if there is one more line on the input stream.
 
 Does not remove the line read.
 TODO: fill the documentation
 
-=item B<readLine([$timeout])> - reads the next line from the input stream and returns it. 
+=item B<read_line([$timeout])> - reads the next line from the input stream and returns it. 
 
 The line read is removed from the input stream.
 TODO: fill the documentation

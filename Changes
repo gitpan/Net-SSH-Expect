@@ -1,5 +1,22 @@
 Revision history for Perl extension Net::SSH::Expect.
 
+1.02 2007/08/03 
+	- API changes:
+		- waitfor() does not returns in list context anymore, it only returns boolean.
+		- created methods before(), match() and after() to get the info about the match
+		operation done by waitfor().
+		- waitfor() accepts the optional paramenters '-re' and '-ex' to say if string
+		must be matched as a pattern or literal string.
+	- Bug fix:
+		- peek() now will run a new expect() if it detects that there is data on
+		$exp->after(). This wasn't done before. Without it peek() could print data that
+		is not in the expect accumulator anymore.
+	- Implementation improvements:
+		- created a _secExpect() method, stands for "secure expect". It replaces expect().
+		It croaks according to the errors it finds when it is reading from the input stream.
+		All the methods that used to run expect() directly now run _secExpect().
+	- Documentation improvement.
+
 1.01 2007/08/03
 	- Documentation improvement.
 

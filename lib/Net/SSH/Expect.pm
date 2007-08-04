@@ -5,13 +5,13 @@ use strict;
 use fields qw(
 	host user password port no_ptty escape_char ssh_option
 	raw_pty exp_internal exp_debug log_file log_stdout
-	timeout terminator ssh_connection debug next_line
+	timeout terminator expect debug next_line before match after
 );
 use Expect;
 use Carp;
 use POSIX qw(:signal_h WNOHANG);
 
-our $VERSION = '1.01';
+our $VERSION = '1.02';
 
 # error contants
 use constant ILLEGAL_STATE => "IllegalState";
@@ -49,8 +49,11 @@ sub new {
 	$self->timeout(defined $args{timeout} ? $args{timeout} : 1);
 	$self->{terminator} 	= $args{terminator} || "\n";
 	$self->{next_line}		= "";
-	$self->{ssh_connection} = undef;
+	$self->{expect}			= undef;	# this will hold the Expect instance
 	$self->{debug}			= $args{debug} || 0;
+	$self->{before}			= "";
+	$self->{match}			= "";
+	$self->{after}			= "";
 
 	# validating the user input
 	foreach my $key (keys %args) {
@@ -62,34 +65,24 @@ sub new {
 	return $self;
 }
 
-sub _connection_aborted {
-	croak (SSH_CONNECTION_ABORTED);
-}
-
-# string login ([$test_success]) - authenticates on the ssh server. This should die if login fails.
-# param:
-#	boolean $test_success: 0 | 1. if 1, login will do an extra-text to verify if the password
-# 		entered was accepted. The test consists in verifying if, after sending the password,
-#		the "Password" prompt shows up again. This indicates the password was rejected.
-#		This test is disabled by default.
+# boolean run_ssh() - forks the ssh client process
+#	This method has three roles:
+#	1) 	Instantiate a new Expect object configuring it with all the defaults and user-defined
+#		settings.
+#	2)	Define the ssh command line using the defaults and user-defined settings
+#	3)	Fork the ssh process using the spawn() method of the Expect instance we created.
+#		
 # returns:
-#	string: whatever the SSH server wrote in my input stream after loging in. This usually is some
-#		welcome message and/or the remote prompt. You could use this string to do your verification
-#		that the login was successful. The content returned is removed from the input stream.
-# dies:
-#	IllegalState: if any of 'host' or 'user' or 'password' fields are unset.
-#	SSHProccessError: if can't spawn the ssh process
-# 	SSHConnectionError: if the connection failed for some reason, like invalid 'host' address or network problems.
-sub login {
-    my Net::SSH::Expect $self = shift;
-	my $test_success = @_ ? shift : 0;
+#	boolean: 1 if the ssh ran OK or 0 otherwise. In case of failures, use $! to do get info.
+sub run_ssh {
+	my Net::SSH::Expect $self = shift;
 
 	my $user = $self->{user};
 	my $host = $self->{host};
-	my $password = $self->{password};
-	my $timeout = $self->{timeout};
-	my $port = $self->{port};
-	my $t = $self->{terminator};
+
+	croak(ILLEGAL_STATE . " field 'host' is not set.") unless $host;
+	croak(ILLEGAL_STATE . " field 'user' is not set.") unless $user;
+
 	my $log_file = $self->{log_file};
 	my $log_stdout = $self->{log_stdout};
 	my $exp_internal = $self->{exp_internal};
@@ -98,11 +91,8 @@ sub login {
 	my $raw_pty = $self->{raw_pty};
 	my $escape_char = $self->{escape_char};
 	my $ssh_option = $self->{ssh_option};
-	
-	croak(ILLEGAL_STATE . " field 'user' is not set.") unless $user;
-	croak(ILLEGAL_STATE . " field 'password' is not set.") unless $password;
-	croak(ILLEGAL_STATE . " field 'host' is not set.") unless $host;
-	
+	my $port = $self->{port};
+
 	# Gather flags.
 	my $flags = "";
 	$flags .= $escape_char ? "-e '$escape_char' " : "-e none ";
@@ -111,130 +101,183 @@ sub login {
 	$flags .= $ssh_option if $ssh_option;
 	
 	my $ssh_string = "ssh $flags $user\@$host";
-	my $ssh = new Expect();
+	my $exp = new Expect();
 	
-	$ssh->log_stdout($log_stdout);
-	$ssh->log_file($log_file, "w") if $log_file;
-	$ssh->exp_internal($exp_internal);
-	$ssh->debug($exp_debug);
-	$ssh->raw_pty($raw_pty);	
-	$ssh->restart_timeout_upon_receive(1);
-	$ssh->spawn($ssh_string) or croak SSH_PROCESS_ERROR . " Couldn't start ssh: $!\n";
+	# saving this instance
+	$self->{expect} = $exp; 
 	
-	# saving this connection
-	$self->{ssh_connection} = $ssh; 
+	# configuring the expect object
+	$exp->log_stdout($log_stdout);
+	$exp->log_file($log_file, "w") if $log_file;
+	$exp->exp_internal($exp_internal);
+	$exp->debug($exp_debug);
+	$exp->raw_pty($raw_pty);	
+	$exp->restart_timeout_upon_receive(1);
+	my $success = $exp->spawn($ssh_string); 
 	
+	return (defined $success);
+}
+
+# string login ([$test_success]) - authenticates on the ssh server. 
+#	This method responds to the authentication prompt sent by the SSH server.
+#	It runs the run_ssh() method only if it wasn't run before(), but it'll die
+#	if run_ssh() returns false.
+#
+# param:
+#	boolean $test_success: 0 | 1. if 1, login will do an extra-text to verify if the password
+# 		entered was accepted. The test consists in verifying if, after sending the password,
+#		the "Password" prompt shows up again what would indicate that the password was rejected.
+#		This test is disabled by default.
+# returns:
+#	string: whatever the SSH server wrote in my input stream after loging in. This usually is some
+#		welcome message and/or the remote prompt. You could use this string to do your verification
+#		that the login was successful. The content returned is removed from the input stream.
+# dies:
+#	IllegalState: if any of 'host' or 'user' or 'password' fields are unset.
+#	SSHProccessError: if run_ssh() failed to spawn the ssh process
+# 	SSHConnectionError: if the connection failed for some reason, like invalid 'host' address or network problems.
+sub login {
+    my Net::SSH::Expect $self = shift;
+	my $test_success = @_ ? shift : 0;
+
+	my $user = $self->{user};
+	my $password = $self->{password};
+	my $timeout = $self->{timeout};
+	my $t = $self->{terminator};
+
+	croak(ILLEGAL_STATE . " field 'user' is not set.") unless $user;
+	croak(ILLEGAL_STATE . " field 'password' is not set.") unless $password;
+
+	# spawns the ssh process if this wasn't done yet
+	if (! defined($self->{expect})) {
+		$self->run_ssh() or croak SSH_PROCESS_ERROR . " Couldn't start ssh: $!\n";
+	}
+
+	my $exp = $self->get_expect();
+
 	# loggin in
-	$ssh->expect($timeout,
-		[ qr/\(yes\/no\)\?\s*$/ => sub { $ssh->send("yes$t"); exp_continue; } ],
-		[ qr/[Pp]assword.*?:|[Pp]assphrase.*?:/  => sub { $ssh->send("$password$t"); } ],
-		[ qr/$password$/		=> sub { $self->_retry ($password); return exp_continue; } ],
-		[ qr/ogin:\s*$/         => sub { $ssh->send("$user$t"); exp_continue; } ],
-		[ qr/$user$/			=> sub { $self->_retry ($user); return exp_continue; } ],
+	$self->_sec_expect($timeout,
+		[ qr/\(yes\/no\)\?\s*$/ => sub { $exp->send("yes$t"); exp_continue; } ],
+		[ qr/[Pp]assword.*?:|[Pp]assphrase.*?:/  => sub { $exp->send("$password$t"); } ],
+		[ qr/ogin:\s*$/         => sub { $exp->send("$user$t"); exp_continue; } ],
 		[ qr/REMOTE HOST IDEN/  => sub { print "FIX: .ssh/known_hosts\n"; exp_continue; } ],
-		[ qr/yes$/				=> sub { $self->_retry("yes"); exp_continue; }], 
 		[ timeout				=> sub 
 			{ 
 				croak SSH_AUTHENTICATION_ERROR . " Login timed out. " .
 				"The input stream currently has the contents bellow: " .
 				$self->peek();
 			} 
-		],
-		[ eof					=> \&_connection_aborted ]
+		]
 	);
 	
 	# verifying if we failed to logon
 	if ($test_success) {
-		$ssh->expect($timeout, 
+		$self->_sec_expect($timeout, 
 			[ qr/[Pp]assword.*?:|[Pp]assphrase.*?:/  => 			
 				sub { 
-					my $error = $ssh->before() || $ssh->match();
+					my $error = $self->peek();
 					croak(SSH_AUTHENTICATION_ERROR . " Error: Bad password [$error]");
 				}
 			]
 		);
 	}
 
-   	# swallows any output the put in my input stream after loging in	
-	my $welcome_msg;
-	while ($ssh->expect($timeout, '-re', qr/[\s\S]+/)) {
-		$welcome_msg .= $ssh->match();
-	}
-
-	return $welcome_msg;
+   	# swallows any output the server wrote to my input stream after loging in	
+	return $self->read_all();
 }
 
 
-# ($prematch, $match) = waitfor ($pattern [, $timeout])
-# This method reads until a pattern match or string is found in the input stream.
+
+# boolean waitfor ($string [, $timeout, $match_type])
+# This method reads until a pattern or string is found in the input stream.
 # All the characters before and including the match are removed from the input stream.
+# 
+# After waitfor returns, use the methods before(), match() and after() to get the data
+# 'before the match', 'what matched', and 'after the match' respectively.
 #
-# In a list context the characters before the match and the matched characters are returned 
-# in $prematch and $match. In a scalar context, the matched characters and all characters
-# before it are discarded and 1 is returned on success. On time-out, eof, or other failures,
-# for both list and scalar context, the error mode action is performed. See errmode().
+# If waitfor returns false, whatever content is on input stream can be accessed with 
+# before(). In this case before() will return the same content as peek(). 
 #
+# params:
+#	$string: a string to be matched. It can be a regular expression or a literal string
+#			 anb its interpretation as one or other depends on $match_type. Default is
+#			 're', what treats $string as a regular expression.
 #
+#	$timeout: the timeout in seconds while waiting for $string
+#
+#	$match_type: match_type affects how $string will be matched:
+#		'-re': means $string is a regular expression.
+#		'-ex': means $string is an "exact match", i.e., will be matched literally.
+#
+# returns: 
+#	boolean: 1 is returned if string was found, 0 otherwise. When the match fails
+#			 waitfor() will only return after waiting $timeout seconds.
+#
+# dies:
+#	SSH_CONNECTION_ABORTED if EOF is found (error type 2)
+#	SSH_PROCESS_ERROR if the ssh process has died (error type 3)
+#	SSH_CONNECTION_ERROR if unknown error (type 4) is found
 sub waitfor {
 	my Net::SSH::Expect $self = shift;
 	my $pattern = shift;
 	my $timeout = @_ ? shift : $self->{timeout};
-	my $ssh = $self->get_expect();
+	my $match_type = @_ ? shift : '-re';
+	croak ( ILLEGAL_ARGUMENT . "match_type '$match_type' is invalid." )
+		unless ($match_type eq '-re' || $match_type eq '-ex');
 
-	my $match = "";
-	my $pre_match = "";
-	$ssh->expect($timeout, 
-		[qr/$pattern/ => 
-			sub {
-				$match = $ssh->match();
-				$pre_match = $ssh->before();
-			}
-		],
-		[ eof => \&_connection_aborted ]
-	);
+	my ($pos, $error);
+	($pos, $error, $self->{match}, $self->{before}, $self->{after}) 
+		= $self->_sec_expect($timeout, $match_type, $pattern);
 	
-	my $list_context = wantarray() ? 1 : 0;
-
-	if ($list_context) {
-		return ($pre_match, $match);
-	} else {
-		if ($match) {
-			return 1;
-		} else {
-			return 0;
-		}
-	}
+	return (defined $pos);
 }
+
+# string before() - returns the "before match" data of the last waitfor() call, or empty string.
+sub before {
+	my Net::SSH::Expect $self = shift;
+	return $self->{before};
+}
+
+# string match() - returns the "match" data of the last waitfor() call, or empty string.
+sub match {
+	my Net::SSH::Expect $self = shift;
+	return $self->{match};
+}
+
+# string after() - returns the "after match" data of the last waitfor() call, or empty string.
+sub after {
+	my Net::SSH::Expect $self = shift;
+	return $self->{after};
+}
+
 
 # send ("string") - breaks on through to the other side.
 sub send {
 	my Net::SSH::Expect $self = shift;
 	my $send = shift;
 	croak (ILLEGAL_ARGUMENT . " missing argument 'string'.") unless ($send);
-	my $ssh = $self->get_expect();
+	my $exp = $self->get_expect();
 	my $t = $self->{terminator};
-	$ssh->send($send . $t);
+	$exp->send($send . $t);
 }
 
 # peek([$timeout]) - returns what is in the input stream without removing anything
+# dies:
+#	SSH_CONNECTION_ABORTED if EOF is found (error type 2)
+#	SSH_PROCESS_ERROR if the ssh process has died (error type 3)
+#	SSH_CONNECTION_ERROR if unknown error (type 4) is found
 sub peek {
 	my Net::SSH::Expect $self = shift;
 	my $timeout = @_ ? shift : $self->{timeout};
-	my $ssh = $self->get_expect();
+	my $exp = $self->get_expect();
 	
-	unless (defined $ssh->before() && $ssh->before() ne "") {
-		my ($pos, $error, $match, $before, $after) = $ssh->expect($timeout);
-		unless (defined $before && !($before eq "")) {
-			# validates that the SSH connection was not terminated yet
-			my $error_first_digit = substr($error, 0, 1);
-			if ($error_first_digit eq '2') {
-				croak (ILLEGAL_STATE_NO_SSH_CONNECTION);
-			} elsif ($error_first_digit eq '3') {
-				croak (SSH_PROCESS_ERROR . " The ssh process was terminated.");
-			}
-		}
+	# the test bellow assures that there is no data on $exp->after() and checks if 
+	# $exp->before has a valid value. If any of these fail, a new expect() will be run.
+	unless ( ( $exp->after() eq "" || ! defined($exp->after()) )  
+					&&	defined $exp->before() && $exp->before() ne "") {
+		$self->_sec_expect($timeout);
 	}
-	return $ssh->before();
+	return $exp->before();
 }
 
 # string eat($string)- removes all the head of the input stream until $string inclusive.
@@ -243,11 +286,11 @@ sub peek {
 #
 #	Use it associated with peek to eat everything that appears on the input stream:
 #
-#	while ($chunk = $ssh->eat($ssh->peak())) {
+#	while ($chunk = $exp->eat($exp->peak())) {
 #		print $chunk;
 #	}
 #	
-#	Or use the readAll() method that does the above loop for you returning the accumulated
+#	Or use the read_all() method that does the above loop for you returning the accumulated
 #	result.
 #
 # param:
@@ -260,8 +303,13 @@ sub peek {
 # returns:
 #	string: the removed content or empty string if there is nothing in the input stream.
 # 
+# dies:
+#	SSH_CONNECTION_ABORTED if EOF is found (error type 2)
+#	SSH_PROCESS_ERROR if the ssh process has died (error type 3)
+#	SSH_CONNECTION_ERROR if unknown error (type 4) is found
+#
 # debbuging features:
-#	The following warnings are printed to STDERR if $ssh->debug() == 1:
+#	The following warnings are printed to STDERR if $exp->debug() == 1:
 #		eat() prints a warning is $string wasn't found in the head of the input stream.
 #		eat() prints a warning is $string was empty or undefined.
 #
@@ -275,60 +323,59 @@ sub eat {
 		return $string;
 	}
 
-	my $ssh = $self->get_expect();
+	my $exp = $self->get_expect();
 
 	# the top of the input stream that will be removed from there and
 	# returned to the user
 	my $top;
 
 	# eat $string from (hopefully) the head of the input stream
-	$ssh->expect(0, '-ex', $string);
-	$top .= $ssh->match();
+	$self->_sec_expect(0, '-ex', $string);
+	$top .= $exp->match();
 
 	# if before() returns any content, the $string passed is not in the beginning of the 
 	# input stream.
-	if (defined $ssh->before() && !($ssh->before() eq "") ) {
+	if (defined $exp->before() && !($exp->before() eq "") ) {
 		if ($self->{debug}) {
 			carp ("eat(): param \$string '$string' was found on the input stream ".
-				"after '". $ssh->before() . "'.");
+				"after '". $exp->before() . "'.");
 		}
-		$top = $ssh->before() . $top; 
+		$top = $exp->before() . $top; 
 	}
 	return $top;
 }
 
-# string readAll([$timeout]) - reads and remove all the output from the input stream.
+# string read_all([$timeout]) - reads and remove all the output from the input stream.
 # The reading/removing process will be interrupted after $timeout seconds of inactivity
 # on the input stream.
-sub readAll {
+sub read_all {
 	my Net::SSH::Expect $self = shift;
 	my $timeout = @_ ? shift : $self->{timeout};
-	my $ssh = $self->get_expect();
 	my $out;
-	my $chunk;
-	while ($chunk = $self->eat($self->peek($timeout))) {
-		$out .= $chunk;
+	while ($self->_sec_expect($timeout, '-re', qr/[\s\S]+/)) {
+		$out .= $self->get_expect()->match();
 	}
 	return $out;
 }
 
 
-# boolean hasLine([$timeout]) - tells if there is one more line on the input stream
-sub hasLine {
+# boolean has_line([$timeout]) - tells if there is one more line on the input stream
+sub has_line {
 	my Net::SSH::Expect $self = shift;
 	my $timeout = @_ ? shift : $self->{timeout};
-	$self->{next_line} = $self->readLine($timeout);
-	return !($self->{next_line} eq "");
+	$self->{next_line} = $self->read_line($timeout);
+	return ($self->{next_line} ne "");
 }
 
-# string readLine([$timeout]) - reads the next line from the input stream
-sub readLine {
+# string read_line([$timeout]) - reads the next line from the input stream
+sub read_line {
 	my Net::SSH::Expect $self = shift;
 	my $timeout = @_ ? shift : $self->{timeout};
 	my $line = $self->{next_line};
 	if ($line eq "") { 
-		my $nl;
-		($line, $nl) = $self->waitfor('\n', $timeout);
+		if ( $self->waitfor('\n', $timeout) ) {
+			$line = $self->before();
+		}
 	} else {
 		$self->{next_line} = "";
 	}
@@ -341,21 +388,22 @@ sub exec {
 	my $cmd = shift;
 	my $timeout = @_ ? shift : $self->{timeout};
 	$self->send($cmd);
-	return $self->readAll($timeout);
+	return $self->read_all($timeout);
 }
 
 sub close {
 	my Net::SSH::Expect $self = shift;
-	my $ssh = $self->get_expect();
-	$ssh->hard_close();
+	my $exp = $self->get_expect();
+	$exp->hard_close();
 	return 1;
 }
+
 
 # returns 
 #	reference: the internal Expect object used to manage the ssh connection.
 sub get_expect {
 	my Net::SSH::Expect $self = shift;
-	my $exp = defined ($self->{ssh_connection}) ? $self->{ssh_connection} : 
+	my $exp = defined ($self->{expect}) ? $self->{expect} : 
 		croak (ILLEGAL_STATE_NO_SSH_CONNECTION);
 	return $exp;
 }
@@ -395,7 +443,7 @@ sub port {
 	$self->{port} = $port;
 }
 
-# boolean debug([0|1]) - gets/sets the $ssh->{debug} attribute.
+# boolean debug([0|1]) - gets/sets the $exp->{debug} attribute.
 sub debug {
 	my Net::SSH::Expect $self = shift;
 	if (@_) {
@@ -419,7 +467,46 @@ sub timeout {
 	$self->{timeout} = $timeout;
 }
 
+#
+# Private Methods 
+#
+
+# _sec_expect(@params) - secure expect. runs expect with @params and croaks if problems happen
+# Note: timeout is not considered a problem.
+# params:
+#	the same parameters as expect() accepts.
+# returns:
+# 	the same as expect() returns
+# dies:
+#	SSH_CONNECTION_ABORTED if EOF is found (error type 2)
+#	SSH_PROCESS_ERROR if the ssh process has died (error type 3)
+#	SSH_CONNECTION_ERROR if unknown error is found (error type 4)
+sub _sec_expect {
+	my Net::SSH::Expect $self = shift;
+	my @params = @_ ? @_ : die ("\@params cannot be undefined.");
+	my $exp = $self->get_expect();
+	my ($pos, $error, $match, $before, $after) = $exp->expect(@params);
+	if (defined $error) {
+		my $error_first_digit = substr($error, 0, 1);
+		if ($error_first_digit eq '2') {	
+			# found eof
+			croak (SSH_CONNECTION_ABORTED);
+		} elsif ($error_first_digit eq '3') {  
+			# ssh process died
+			croak (SSH_PROCESS_ERROR . " The ssh process was terminated.");
+		} elsif ($error_first_digit eq '4') {   
+			# unknown reading error
+			croak (SSH_CONNECTION_ERROR . " Reading error type 4 found: $error");
+		}
+	}
+	if (wantarray()) {
+		return ($pos, $error, $match, $before, $after);
+	} else {
+		return $pos;
+	}
+}
 
 1;
+
 
 
