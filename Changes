@@ -1,5 +1,19 @@
 Revision history for Perl extension Net::SSH::Expect.
 
+1.03 2007/08/03
+	- Bug fix:
+		- peek() now always calls expect($timeout). It won't make any test that could avoid
+		calling expect.
+	- API changes:
+		- the has_line() method was removed since it is unecessary. Also it was implemented incorrectly
+		since it removed the line from the input stream, while it was supposed to say if there is a line
+		without removing anything.
+		- read_line() now returns undef when there are no more lines on input stream. An empty string
+		is now a valid return string, this happens when a line contains only a 'terminator' character ("\n").
+		- added the constructor option 'restart_timeout_upon_receive' and get/setter method 
+		restart_timeout_upon_receive() to set the restart_timeout_upon_receive() method of the internal
+		Expect object.
+
 1.02 2007/08/03 
 	- API changes:
 		- waitfor() does not returns in list context anymore, it only returns boolean.
@@ -7,6 +21,7 @@ Revision history for Perl extension Net::SSH::Expect.
 		operation done by waitfor().
 		- waitfor() accepts the optional paramenters '-re' and '-ex' to say if string
 		must be matched as a pattern or literal string.
+		- created a run_ssh() method to configure Expect and run the ssh command.
 	- Bug fix:
 		- peek() now will run a new expect() if it detects that there is data on
 		$exp->after(). This wasn't done before. Without it peek() could print data that
@@ -15,6 +30,8 @@ Revision history for Perl extension Net::SSH::Expect.
 		- created a _secExpect() method, stands for "secure expect". It replaces expect().
 		It croaks according to the errors it finds when it is reading from the input stream.
 		All the methods that used to run expect() directly now run _secExpect().
+		- the code of run_ssh() was removed from inside the login() method. Now it's possible to 
+		use this module without a password-based authentication.
 	- Documentation improvement.
 
 1.01 2007/08/03

@@ -4,14 +4,14 @@ use warnings;
 use strict;
 use fields qw(
 	host user password port no_ptty escape_char ssh_option
-	raw_pty exp_internal exp_debug log_file log_stdout
+	raw_pty exp_internal exp_debug log_file log_stdout restart_timeout_upon_receive
 	timeout terminator expect debug next_line before match after
 );
 use Expect;
 use Carp;
 use POSIX qw(:signal_h WNOHANG);
 
-our $VERSION = '1.02';
+our $VERSION = '1.03';
 
 # error contants
 use constant ILLEGAL_STATE => "IllegalState";
@@ -44,7 +44,8 @@ sub new {
 	$self->{exp_debug}		= $args{exp_debug} || 0;
 	$self->{log_file} 		= $args{log_file} || undef;
 	$self->{log_stdout}		= $args{log_stdout} || 0;
-	
+	$self->{restart_timeout_upon_receive} = $args{restart_timeout_upon_receive} || 0;
+
 	# Attributes for this module 
 	$self->timeout(defined $args{timeout} ? $args{timeout} : 1);
 	$self->{terminator} 	= $args{terminator} || "\n";
@@ -92,6 +93,7 @@ sub run_ssh {
 	my $escape_char = $self->{escape_char};
 	my $ssh_option = $self->{ssh_option};
 	my $port = $self->{port};
+	my $rtup = $self->{restart_timeout_upon_receive};
 
 	# Gather flags.
 	my $flags = "";
@@ -112,7 +114,7 @@ sub run_ssh {
 	$exp->exp_internal($exp_internal);
 	$exp->debug($exp_debug);
 	$exp->raw_pty($raw_pty);	
-	$exp->restart_timeout_upon_receive(1);
+	$exp->restart_timeout_upon_receive($rtup);
 	my $success = $exp->spawn($ssh_string); 
 	
 	return (defined $success);
@@ -262,6 +264,8 @@ sub send {
 }
 
 # peek([$timeout]) - returns what is in the input stream without removing anything
+#	params:
+#		$timeout: how many seconds peek() will wait for input
 # dies:
 #	SSH_CONNECTION_ABORTED if EOF is found (error type 2)
 #	SSH_PROCESS_ERROR if the ssh process has died (error type 3)
@@ -270,13 +274,7 @@ sub peek {
 	my Net::SSH::Expect $self = shift;
 	my $timeout = @_ ? shift : $self->{timeout};
 	my $exp = $self->get_expect();
-	
-	# the test bellow assures that there is no data on $exp->after() and checks if 
-	# $exp->before has a valid value. If any of these fail, a new expect() will be run.
-	unless ( ( $exp->after() eq "" || ! defined($exp->after()) )  
-					&&	defined $exp->before() && $exp->before() ne "") {
-		$self->_sec_expect($timeout);
-	}
+	$self->_sec_expect($timeout);
 	return $exp->before();
 }
 
@@ -364,20 +362,34 @@ sub has_line {
 	my Net::SSH::Expect $self = shift;
 	my $timeout = @_ ? shift : $self->{timeout};
 	$self->{next_line} = $self->read_line($timeout);
-	return ($self->{next_line} ne "");
+	return (defined $self->{next_line});
 }
 
 # string read_line([$timeout]) - reads the next line from the input stream
+# Read a line of text. A line is considered to be terminated by the 'teminator'
+# character. Default is "\n". Lines can also be ended with "\r" or "\r\n".
+# Remember to adequate this for your system with the terminator() method. 
+# When there are no more lines available, read_line() returns undef. Note that this doen't mean
+# there is no data left on input stream since there can be a string not terminated with the 
+# 'terminator' character, notably the remote prompt could be left there when read_line() returns
+# undef.
+#
+# params:
+#	$timeout: the timeout waiting for a line. Defaults to timeout().
+#
+# returns:
+#	string: a line on the input stream, without the trailing 'terminator' character.
+#			An empty string indicates that the line read only contained the 'terminator'
+#			character (an empty line)
+#	undef: when there are no more lines on the input stream.
+#
 sub read_line {
 	my Net::SSH::Expect $self = shift;
 	my $timeout = @_ ? shift : $self->{timeout};
-	my $line = $self->{next_line};
-	if ($line eq "") { 
-		if ( $self->waitfor('\n', $timeout) ) {
-			$line = $self->before();
-		}
-	} else {
-		$self->{next_line} = "";
+	my $t = $self->{terminator};
+	my $line = undef;
+	if ( $self->waitfor($t, $timeout) ) {
+		$line = $self->before();
 	}
 	return $line;
 }
@@ -408,12 +420,24 @@ sub get_expect {
 	return $exp;
 }
 
+# void restart_timeout_upon_receive( 0 | 1 ) - changes the timeout counter behaviour
+# params:
+#	boolean: if true, sets the timeout to "inactivity timeout", if false
+#			sets it to "absolute timeout".
+# dies:
+#	IllegalParamenter if argument is not given.
+sub restart_timeout_upon_receive {
+	my Net::SSH::Expect $self = shift;
+	my $value = @_ ? shift : croak (ILLEGAL_ARGUMENT . " missing argument.");
+	$self->get_expect()->restart_timeout_upon_receive($value);
+}
+
 sub reapChild {
    do {} while waitpid(-1,WNOHANG) > 0;
 }
 
 #
-# Getter/Setter methods
+# Setter methods
 #
 
 sub host {
@@ -441,6 +465,12 @@ sub port {
 	croak (ILLEGAL_ARGUMENT . " Passed number '$port' is not a valid port number") 
 		if ($port !~ /\A\d+\z/ || $port < 1 || $port > 65535);
 	$self->{port} = $port;
+}
+
+sub terminator {
+	my Net::SSH::Expect $self = shift;
+	$self->{terminator} = shift if (@_);
+	return $self->{terminator};
 }
 
 # boolean debug([0|1]) - gets/sets the $exp->{debug} attribute.

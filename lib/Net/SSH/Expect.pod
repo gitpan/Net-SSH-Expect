@@ -58,9 +58,10 @@ Net::SSH::Expect - SSH wrapper to execute remote commands
 	# When running a command that causes a huge output,
 	# lets get the output line by line:
 	$ssh->send("find /");   # using send() instead of exec()
-  	while ( $ssh->has_line() ) {
-	    # returns the next line, removing it from the input stream:
-	    print $ssh->read_line() . "\n";  
+	my $line;
+	# returns the next line, removing it from the input stream:
+  	while ( defined ($line = $ssh->read_line()) ) {
+	    print $line . "\n";  
 	}
 
 	# take a look in what is immediately available on the input stream
@@ -178,34 +179,34 @@ to know what each one does.
 
 =over 4
 
-=item String B<user>
+=item string B<user>
 
 the username to login.
 
-=item String B<password>
+=item string B<password>
 
 the password used to login.
 
-=item String B<host>
+=item string B<host>
 
 the address(dns name/ip) to the ssh server
 
-=item String B<port>
+=item string B<port>
 
 Feeds the -p ssh client option with alternate ssh port. This option is not set by default.
 
-=item Boolean B<no_ptty>
+=item boolean B<no_ptty>
 
 If enabled adds the -T ssh client option to the ssh command line. See the discussion on "IMPORTANT NOTES 
 ABOUT DEALING WITH SSH AND PSEUDO-TERMINALS" to know if you want to enable this.
 
-=item Char B<escape_char>
+=item char B<escape_char>
 
 Passes a character to the -e ssh client option. This enables ssh escapes. Since this
 option can cause trouble, it is explicitly turned off by default with a '-e none' option 
 being set on the ssh command line.
 
-=item String B<ssh_option>
+=item string B<ssh_option>
 
 This lets you add your own ssh options to the command line. Set this string to the options you want,
 like '-v -p 2022', and your options will be added to the ssh command line that will start the ssh process.
@@ -218,27 +219,32 @@ The following constructor attributes can be used to configure special features o
 
 =over 4
 
-=item String B<log_file>
+=item string B<log_file>
 
 Used as argument to the internal Expect->log_file() method. Default is no logfile.
 
-=item Boolean B<log_stdout>
+=item boolean B<log_stdout>
 
 Used as argument to the internal Expect->log_sdtout() method. Default is 0, to disable log to stdout.
 
-=item Boolean B<exp_internal>
+=item boolean B<exp_internal>
 
 Argument to be passed to the internal Expect->exp_internal() method. Default is 0, to disable the internal exposure.
 
-=item Boolean B<exp_debug>
+=item boolean B<exp_debug>
 
 Argument to be passed to the internal Expect->debug() method. Default is 0, to disable debug.
 
-=item Boolean B<raw_pty>
+=item boolean B<raw_pty>
 
 Argument to be passed to the internal Expect->raw_pty() method. It's recommended that you enable this. See the disscussion
 in "IMPORTANT NOTES ABOUT DEALING WITH SSH AND PSEUDO-TERMINALS" to know why.
 Default is 0 to let the local ptty as its defaults.
+
+=item boolean B<restart_timeout_upon_receive>
+
+If this is enabled the timeout in all reading operations works as an inactivity timeout - it'll not start counting
+while there is data arriving on input stream. Default is 0.
 
 =back
 
@@ -246,19 +252,27 @@ Default is 0 to let the local ptty as its defaults.
 
 =over 4
 
-=item String B<terminator>
+=item string B<terminator>
 
 the line terminator in use on the SSH server, this will added at the end of each command
 passed to the C<exec()> method. The default is C<\n>.
 
-=item Integer B<timeout>
+It also affects the read_line() method, it expect each line to be terminated by the 'teminator'
+character. Lines can also be ended with "\r" or "\r\n" in some systems.
+Remember to adjust this for your system. 
+
+You can also use the terminator() method to set this attribute.
+
+=item integer B<timeout>
 
 The maximum time to wait for a pattern to show up on input stream before giving up
 in a read operation. The default is 1 second.
 
+Timeout must always be an integer >= 0.
+
 This attribute can also be get/set with the C<timeout()> method.
 
-=item Boolean B<debug>
+=item boolean B<debug>
 
 Causes some methods to print debug messages to the STDERR. This feature is not widely implemented yet. 
 (only eat() implements it until this moment)
@@ -267,9 +281,7 @@ Causes some methods to print debug messages to the STDERR. This feature is not w
 
 =head1 METHODS
 
-=over 4
-
-=item boolean B<run_ssh()> - forks the ssh client process
+=head4 boolean B<run_ssh()> - forks the ssh client process
 
 	# boolean run_ssh() - forks the ssh client process
 	#	This method has three roles:
@@ -282,7 +294,7 @@ Causes some methods to print debug messages to the STDERR. This feature is not w
 	#	boolean: 1 if the ssh ran OK or 0 otherwise. In case of failures, use $! to do get info
 
 
-=item String B<login($test_success)>  - authenticates on the ssh server. 
+=head4 string B<login($test_success)>  - authenticates on the ssh server. 
 
 	# string login ([$test_success]) - authenticates on the ssh server. 
 	#	This method responds to the authentication prompt sent by the SSH server.
@@ -303,12 +315,11 @@ Causes some methods to print debug messages to the STDERR. This feature is not w
 	#	SSHProccessError: if run_ssh() failed to spawn the ssh process
 	# 	SSHConnectionError: if the connection failed for some reason, like invalid 'host' address or network problems.
 
-
-=item B<exec($cmd [,$timeout])> - executes a command in the remote machine returning its output
+=head4 string B<exec($cmd [,$timeout])> - executes a command in the remote machine returning its output
 
 TODO: fill the documentation
 
-=item B<waitfor($pattern [,$timeout])>
+=head4 boolean B<waitfor($pattern [,$timeout])>
 
 	# boolean waitfor ($string [, $timeout, $match_type])
 	# This method reads until a pattern or string is found in the input stream.
@@ -340,27 +351,27 @@ TODO: fill the documentation
 	#	SSH_PROCESS_ERROR if the ssh process has died (error type 3)
 	#	SSH_CONNECTION_ERROR if unknown error (type 4) is found
 
-=item string B<before()> - returns the "before match" data of the last waitfor() call, or empty string.
+=head4 string B<before()> - returns the "before match" data of the last waitfor() call, or empty string.
 
 TODO: fill the documentation
 
-=item string B<match()> - returns the "match" data of the last waitfor() call, or empty string.
+=head4 string B<match()> - returns the "match" data of the last waitfor() call, or empty string.
 
 TODO: fill the documentation
 
-=item string B<after()> - returns the "after match" data of the last waitfor() call, or empty string.
+=head4 string B<after()> - returns the "after match" data of the last waitfor() call, or empty string.
 
 TODO: fill the documentation
 
-=item B<close()> - terminates the ssh connection
+=head4 void B<close()> - terminates the ssh connection
 
 TODO: fill the documentation
 
-=item B<send($string)> - sends $string to the SSH server, returns nothing
+=head4 void B<send($string)> - sends $string to the SSH server, returns nothing
 
 TODO: fill the documentation
 
-=item B<peek([$timeout])> - returns what is in the input stream without removing anything
+=head4 string B<peek([$timeout])> - returns what is in the input stream without removing anything
 
 	# peek([$timeout]) - returns what is in the input stream without removing anything
 	# dies:
@@ -370,7 +381,7 @@ TODO: fill the documentation
 
 TODO: fill the documentation
 
-=item B<eat($string)> - removes all the head of the input stream until $string inclusive.
+=head4 string B<eat($string)> - removes all the head of the input stream until $string inclusive.
 
 	# string eat($string)- removes all the head of the input stream until $string inclusive.
 	#	eat() will only be able	to remove the $string if it's currently present on the 
@@ -406,23 +417,42 @@ TODO: fill the documentation
 	#		eat() prints a warning is $string was empty or undefined.
 	#
 
-=item B<read_all([$timeout])> - reads and removes all the output from the input stream.
+=head4 string B<read_all([$timeout])> - reads and removes all the output from the input stream.
 
 The reading/removing process will be interrupted after $timeout seconds of inactivity
 on the input stream.
 TODO: fill the documentation
 
-=item B<has_line([$timeout])> - tells if there is one more line on the input stream.
+=head4 string B<read_line([$timeout])> - reads the next line from the input stream and returns it. 
 
-Does not remove the line read.
-TODO: fill the documentation
+	# string read_line([$timeout]) - reads the next line from the input stream
+	# Read a line of text. A line is considered to be terminated by the 'teminator'
+	# character. Default is "\n". Lines can also be ended with "\r" or "\r\n".
+	# Remember to adequate this for your system with the terminator() method. 
+	# When there are no more lines available, read_line() returns undef. Note that this doen't mean
+	# there is no data left on input stream since there can be a string not terminated with the 
+	# 'terminator' character, notably the remote prompt could be left there when read_line() returns
+	# undef.
+	#
+	# params:
+	#	$timeout: the timeout waiting for a line. Defaults to timeout().
+	#
+	# returns:
+	#	string: a line on the input stream, without the trailing 'terminator' character.
+	#			An empty string indicates that the line read only contained the 'terminator'
+	#			character (an empty line).
+	#	undef: when there are no more lines on the input stream.
+	#
 
-=item B<read_line([$timeout])> - reads the next line from the input stream and returns it. 
+=head4 void B<restart_timeout_upon_receive( 0 | 1 )> - changes the timeout counter behaviour
+	# void restart_timeout_upon_receive( 0 | 1 ) - changes the timeout counter behaviour
+	# params:
+	#	boolean: if true, sets the timeout to "inactivity timeout", if false
+	#			sets it to "absolute timeout".
+	# dies:
+	#	IllegalParamenter if argument is not given.
 
-The line read is removed from the input stream.
-TODO: fill the documentation
-
-=item B<get_expect()> - returns a connected Expect object
+=head4 Expect B<get_expect()> - returns the internal Expect object
 
 =over 4
 
