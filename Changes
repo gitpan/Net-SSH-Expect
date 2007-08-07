@@ -1,6 +1,17 @@
 Revision history for Perl extension Net::SSH::Expect.
 
-1.03 2007/08/03
+1.04 2007/08/07
+	- Documentation improvement.
+	- Implementation improvements
+		- waitfor() now verifies that 'after' 'match' will have complient values after an unsuccessful 
+		expect() match.
+	- API changes
+		- after() and match() will return undef after an unsuccessfull waitfor() call.
+	- Renaming
+		- the no_ptty constructor parameter was renamed to no_terminal to avoid confusion with the
+		raw_pty paramenter (one uses pty and the other ptty for the same term: pseudo-tty).
+
+1.03 2007/08/06
 	- Bug fix:
 		- peek() now always calls expect($timeout). It won't make any test that could avoid
 		calling expect.

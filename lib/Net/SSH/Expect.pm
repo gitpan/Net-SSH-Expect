@@ -3,7 +3,7 @@ use 5.008000;
 use warnings;
 use strict;
 use fields qw(
-	host user password port no_ptty escape_char ssh_option
+	host user password port no_terminal escape_char ssh_option
 	raw_pty exp_internal exp_debug log_file log_stdout restart_timeout_upon_receive
 	timeout terminator expect debug next_line before match after
 );
@@ -11,7 +11,7 @@ use Expect;
 use Carp;
 use POSIX qw(:signal_h WNOHANG);
 
-our $VERSION = '1.03';
+our $VERSION = '1.04';
 
 # error contants
 use constant ILLEGAL_STATE => "IllegalState";
@@ -34,7 +34,7 @@ sub new {
     $self->{user}  			= $args{user} || $ENV{'USER'}; 
     $self->{password} 		= $args{password} || undef;
 	$self->{port}			= $args{port} || undef;			# ssh -p
-	$self->{no_ptty}		= $args{no_ptty} || 0; 			# ssh -T
+	$self->{no_terminal}		= $args{no_terminal} || 0; 			# ssh -T
 	$self->{escape_char}	= $args{escape_char} || undef; 	# ssh -e
 	$self->{ssh_option}		= $args{ssh_option} || undef;	# arbitrary ssh options
 	
@@ -88,7 +88,7 @@ sub run_ssh {
 	my $log_stdout = $self->{log_stdout};
 	my $exp_internal = $self->{exp_internal};
 	my $exp_debug = $self->{exp_debug};
-	my $no_ptty = $self->{no_ptty};
+	my $no_terminal = $self->{no_terminal};
 	my $raw_pty = $self->{raw_pty};
 	my $escape_char = $self->{escape_char};
 	my $ssh_option = $self->{ssh_option};
@@ -99,7 +99,7 @@ sub run_ssh {
 	my $flags = "";
 	$flags .= $escape_char ? "-e '$escape_char' " : "-e none ";
 	$flags .= "-p $port " if $port;
-	$flags .= "-T " if $no_ptty;
+	$flags .= "-T " if $no_terminal;
 	$flags .= $ssh_option if $ssh_option;
 	
 	my $ssh_string = "ssh $flags $user\@$host";
@@ -230,23 +230,48 @@ sub waitfor {
 	my ($pos, $error);
 	($pos, $error, $self->{match}, $self->{before}, $self->{after}) 
 		= $self->_sec_expect($timeout, $match_type, $pattern);
+
+	my $debug = $self->{debug};
+
+	# sanity verification
+	# Enforcing that match before and after have correct values
+	if (! defined $pos) { # if the pattern failed to match
+		# match should be undef
+		if (defined $self->{match}) {
+			if ($debug) {
+				carp ("The last expect() didn't match but \$exp->match() returned content '". $self->{match} ."'." .
+						" We'll set \$self->{match} to undef explicitly;");
+			}
+			$self->{match} = undef;
+		}
+		# after should be undef
+		if (defined $self->{after}) {
+			if ($debug) {
+				carp ("The last expect() didn't match but \$exp->after() returned content '". $self->{after} ."'." .
+						" We'll set \$self->{after} to undef explicitly;");
+			}
+			$self->{after} = undef;
+		}
+	} 
 	
 	return (defined $pos);
 }
 
 # string before() - returns the "before match" data of the last waitfor() call, or empty string.
+# if the last waitfor() didn't match, before() will return all the current content on the input
+# stream, just as if you had called peek() with the same timeout.
 sub before {
 	my Net::SSH::Expect $self = shift;
 	return $self->{before};
 }
 
-# string match() - returns the "match" data of the last waitfor() call, or empty string.
+# string match() - returns the "match" data of the last waitfor() call, or undef if didn't match.
 sub match {
 	my Net::SSH::Expect $self = shift;
 	return $self->{match};
 }
 
-# string after() - returns the "after match" data of the last waitfor() call, or empty string.
+# string after() - returns the "after match" data of the last waitfor() call, or undef if didn't match.
 sub after {
 	my Net::SSH::Expect $self = shift;
 	return $self->{after};
