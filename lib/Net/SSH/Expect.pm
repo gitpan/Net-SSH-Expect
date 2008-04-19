@@ -11,7 +11,7 @@ use Expect;
 use Carp;
 use POSIX qw(:signal_h WNOHANG);
 
-our $VERSION = '1.06';
+our $VERSION = '1.07';
 
 # error contants
 use constant ILLEGAL_STATE => "IllegalState";
@@ -21,8 +21,6 @@ use constant SSH_AUTHENTICATION_ERROR => "SSHAuthenticationError";
 use constant SSH_PROCESS_ERROR => "SSHProcessError";
 use constant SSH_CONNECTION_ERROR => "SSHConnectionError";
 use constant SSH_CONNECTION_ABORTED => "SSHConnectionAborted";
-
-$SIG{CHLD} = \&reapChild;
 
 sub new {
     my $type = shift;
@@ -106,6 +104,7 @@ sub run_ssh {
 	# this sets the ssh command line
 	my $ssh_string = $self->{binary} . " $flags $user\@$host";
 	
+	# creating the Expect object
 	my $exp = new Expect();
 	
 	# saving this instance
@@ -458,10 +457,6 @@ sub restart_timeout_upon_receive {
 	my Net::SSH::Expect $self = shift;
 	my $value = @_ ? shift : croak (ILLEGAL_ARGUMENT . " missing argument.");
 	$self->get_expect()->restart_timeout_upon_receive($value);
-}
-
-sub reapChild {
-   do {} while waitpid(-1,WNOHANG) > 0;
 }
 
 #

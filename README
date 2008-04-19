@@ -1,16 +1,7 @@
-Net-SSH-Expect version 0.01
+Net-SSH-Expect
 ===========================
 
-This module is still beta and not every feature it has was already tested
-and/or documented.
-
-I'm counting on you to tell me how your tests are going. Contact me at
-bnegrao@gmail.com. 
-
-Please write to say 'it worked for me bruno!' if you
-didn't have any problems. This will make me flag the module as "mature" 
-one day.
-
+This module is being used by people worldwide and is having a good acceptance. Read the documentation on CPAN to see how you can use this module.
 
 INSTALLATION
 
@@ -26,6 +17,10 @@ DEPENDENCIES
 This module requires these other modules and libraries:
 
 Expect.pm
+
+BUGS
+
+If you find any bug you can use the bug reporting tool available on CPAN website. I'll evaluate each bug and fix as soon as I can.
 
 COPYRIGHT AND LICENCE
 
