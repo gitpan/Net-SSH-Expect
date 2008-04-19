@@ -5,13 +5,13 @@ use strict;
 use fields qw(
 	host user password port no_terminal escape_char ssh_option
 	raw_pty exp_internal exp_debug log_file log_stdout restart_timeout_upon_receive
-	timeout terminator expect debug next_line before match after
+	timeout terminator expect debug next_line before match after binary
 );
 use Expect;
 use Carp;
 use POSIX qw(:signal_h WNOHANG);
 
-our $VERSION = '1.04';
+our $VERSION = '1.06';
 
 # error contants
 use constant ILLEGAL_STATE => "IllegalState";
@@ -34,9 +34,10 @@ sub new {
     $self->{user}  			= $args{user} || $ENV{'USER'}; 
     $self->{password} 		= $args{password} || undef;
 	$self->{port}			= $args{port} || undef;			# ssh -p
-	$self->{no_terminal}		= $args{no_terminal} || 0; 			# ssh -T
+	$self->{no_terminal}	= $args{no_terminal} || 0; 		# ssh -T
 	$self->{escape_char}	= $args{escape_char} || undef; 	# ssh -e
 	$self->{ssh_option}		= $args{ssh_option} || undef;	# arbitrary ssh options
+	$self->{binary}			= $args{binary} || "ssh"; 		# path to SSH binary.
 	
 	# Options used to configure the Expect object
 	$self->{raw_pty}		= $args{raw_pty} || 0;
@@ -102,7 +103,9 @@ sub run_ssh {
 	$flags .= "-T " if $no_terminal;
 	$flags .= $ssh_option if $ssh_option;
 	
-	my $ssh_string = "ssh $flags $user\@$host";
+	# this sets the ssh command line
+	my $ssh_string = $self->{binary} . " $flags $user\@$host";
+	
 	my $exp = new Expect();
 	
 	# saving this instance

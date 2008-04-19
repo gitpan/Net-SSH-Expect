@@ -1,5 +1,11 @@
 Revision history for Perl extension Net::SSH::Expect.
 
+1.06 2008/04/18
+	- added the 'binary' setting that let's the user set the path to the ssh executable. The code used to implement this feature was sent by Garret Ellis, thanks Garret.
+
+1.05 2007/08/23
+	- Documentation improvement.
+
 1.04 2007/08/07
 	- Documentation improvement.
 	- Implementation improvements
