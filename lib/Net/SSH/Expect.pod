@@ -196,7 +196,7 @@ the username to login.
 
 =item string B<password>
 
-the password used to login.
+the password used to login. You won't need to set this field if you have public-key authentication configured for you ssh user. Read run_ssh() documentation for more info.
 
 =item string B<host>
 
@@ -296,29 +296,57 @@ Causes some methods to print debug messages to the STDERR. This feature is not w
 
 =item boolean B<run_ssh()> - forks the ssh client process
 
-	# boolean run_ssh() - forks the ssh client process
+	# boolean run_ssh() - forks the ssh client process opening an ssh connection to the SSH server.
+	#
 	#	This method has three roles:
 	#	1) 	Instantiate a new Expect object configuring it with all the defaults and user-defined
 	#		settings.
 	#	2)	Define the ssh command line using the defaults and user-defined settings
-	#	3)	Fork the ssh process using the spawn() method of the Expect instance we created.
+	#	3)	Fork the ssh process using the spawn() method of the Expect instance we created. 
+	#		The SSH connection is established on this step using the user account set in the 'user'
+	#		constructor attribute. No password is sent here, that happens only in the login() method.
+	#
+	#	This method is run internally by the login() method so you don't need to run it yourself
+	#	in most of the cases. You'll run this method alone if you had set up public-key authentication 
+	#	between the ssh client and the ssh server. In this case you only need to call this method
+	#	to have an authenticated ssh connection, you won't call login(). Note that when you 
+	#	use public-key authentication you won't need to set the 'password' constructor attribute
+	#	but you still need to define the 'user' attribute.
+	#	If you don't know how to setup public-key authentication there's a good guide at
+	#	http://sial.org/howto/openssh/publickey-auth/
 	#		
 	# returns:
-	#	boolean: 1 if the ssh ran OK or 0 otherwise. In case of failures, use $! to do get info
+	#	boolean: 1 if the ssh ran OK or 0 otherwise. In case of failures, use $! to do get info.
 
 
 =item string B<login($test_success)>  - authenticates on the ssh server. 
 
-	# string login ([$test_success]) - authenticates on the ssh server. 
-	#	This method responds to the authentication prompt sent by the SSH server.
+	# string login ([$login_prompt, $password_prompt] [,$test_success]) - authenticates on the ssh server. 
+	#	This method responds to the authentication prompt sent by the SSH server. 
+	#	You can customize the "Login:" and "Password:" prompts that must be expected by passing their
+	#	patterns as arguments to this method, although this method has default values that work to most
+	#	SSH servers out there.
 	#	It runs the run_ssh() method only if it wasn't run before(), but it'll die
 	#	if run_ssh() returns false.
 	#
 	# param:
-	#	boolean $test_success: 0 | 1. if 1, login will do an extra-text to verify if the password
+	#	$login_prompt: A pattern string used to match the "Login:" prompt. The default 
+	#		pattern is qr/ogin:\s*$/
+	#
+	#	$password_prompt: A pattern string used to match the "Password:" prompt. The default
+	#		pattern is qr/[Pp]assword.*?:|[Pp]assphrase.*?:/
+	#
+	#	$test_success: 0 | 1. if 1, login will do an extra-test to verify if the password
 	# 		entered was accepted. The test consists in verifying if, after sending the password,
 	#		the "Password" prompt shows up again what would indicate that the password was rejected.
 	#		This test is disabled by default.
+	#
+	#	OBS: the number of paramaters passed to this method will tell it what parameters are being passed:
+	#	0 parameters: login() : All the default values will be used.
+	#	1 parameter:  login(1) : The $test_success parameter is set.
+	#	2 parameters: login("Login:", "Password:") : the $login_prompt and $password_prompt parameters are set.
+	#	3 parameters: login("Login:", "Password;", 1) : the three parameters received values on this order.
+	#
 	# returns:
 	#	string: whatever the SSH server wrote in my input stream after loging in. This usually is some
 	#		welcome message and/or the remote prompt. You could use this string to do your verification
@@ -416,8 +444,6 @@ And if you don't need a terminal on the server-side at all, set the constructor 
 	#	SSH_CONNECTION_ABORTED if EOF is found (error type 2)
 	#	SSH_PROCESS_ERROR if the ssh process has died (error type 3)
 	#	SSH_CONNECTION_ERROR if unknown error (type 4) is found
-
-TODO: fill the documentation
 
 =item string B<eat($string)> - removes all the head of the input stream until $string inclusive.
 

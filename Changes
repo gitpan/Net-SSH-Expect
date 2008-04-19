@@ -1,7 +1,18 @@
 Revision history for Perl extension Net::SSH::Expect.
 
+1.08 2008/04/19
+	- fixed bug 35141 updating the login() method enabling it to receive the "Login:" and "Password:" prompt
+	patterns as parameters giving the user the ability to customize what prompts should be expected.
+	- updated documentation of method run_ssh() explaining how to use it to enable a public-key authenticated
+	ssh connection.
+
+1.07 2008/04/19
+	- fixed bug 30054 by removing the handler for the CHLD signal. I'm not sure if that handler was needed in fact. 
+	If you see any ssh process remaining as zombie after you run my module let me know.
+
 1.06 2008/04/18
-	- added the 'binary' setting that let's the user set the path to the ssh executable. The code used to implement this feature was sent by Garret Ellis, thanks Garret.
+	- added the 'binary' setting that lets the user set the path to the ssh executable.
+	 The code used to implement this feature was sent by Garret Ellis, thanks Garret.
 
 1.05 2007/08/23
 	- Documentation improvement.

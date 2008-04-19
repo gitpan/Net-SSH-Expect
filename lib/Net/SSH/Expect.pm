@@ -11,7 +11,7 @@ use Expect;
 use Carp;
 use POSIX qw(:signal_h WNOHANG);
 
-our $VERSION = '1.07';
+our $VERSION = '1.08';
 
 # error contants
 use constant ILLEGAL_STATE => "IllegalState";
@@ -65,12 +65,24 @@ sub new {
 	return $self;
 }
 
-# boolean run_ssh() - forks the ssh client process
+# boolean run_ssh() - forks the ssh client process opening an ssh connection to the SSH server.
+#
 #	This method has three roles:
 #	1) 	Instantiate a new Expect object configuring it with all the defaults and user-defined
 #		settings.
 #	2)	Define the ssh command line using the defaults and user-defined settings
-#	3)	Fork the ssh process using the spawn() method of the Expect instance we created.
+#	3)	Fork the ssh process using the spawn() method of the Expect instance we created. 
+#		The SSH connection is established on this step using the user account set in the 'user'
+#		constructor attribute. No password is sent here, that happens only in the login() method.
+#
+#	This method is run internally by the login() method so you don't need to run it yourself
+#	in most of the cases. You'll run this method alone if you had set up public-key authentication 
+#	between the ssh client and the ssh server. In this case you only need to call this method
+#	to have an authenticated ssh connection, you won't call login(). Note that when you 
+#	use public-key authentication you won't need to set the 'password' constructor attribute
+#	but you still need to define the 'user' attribute.
+#	If you don't know how to setup public-key authentication there's a good guide at
+#	http://sial.org/howto/openssh/publickey-auth/
 #		
 # returns:
 #	boolean: 1 if the ssh ran OK or 0 otherwise. In case of failures, use $! to do get info.
@@ -89,7 +101,7 @@ sub run_ssh {
 	my $exp_debug = $self->{exp_debug};
 	my $no_terminal = $self->{no_terminal};
 	my $raw_pty = $self->{raw_pty};
-	my $escape_char = $self->{escape_char};
+		my $escape_char = $self->{escape_char};
 	my $ssh_option = $self->{ssh_option};
 	my $port = $self->{port};
 	my $rtup = $self->{restart_timeout_upon_receive};
@@ -122,16 +134,32 @@ sub run_ssh {
 	return (defined $success);
 }
 
-# string login ([$test_success]) - authenticates on the ssh server. 
-#	This method responds to the authentication prompt sent by the SSH server.
+# string login ([$login_prompt, $password_prompt] [,$test_success]) - authenticates on the ssh server. 
+#	This method responds to the authentication prompt sent by the SSH server. 
+#	You can customize the "Login:" and "Password:" prompts that must be expected by passing their
+#	patterns as arguments to this method, although this method has default values that work to most
+#	SSH servers out there.
 #	It runs the run_ssh() method only if it wasn't run before(), but it'll die
 #	if run_ssh() returns false.
 #
 # param:
-#	boolean $test_success: 0 | 1. if 1, login will do an extra-text to verify if the password
+#	$login_prompt: A pattern string used to match the "Login:" prompt. The default 
+#		pattern is qr/ogin:\s*$/
+#
+#	$password_prompt: A pattern string used to match the "Password:" prompt. The default
+#		pattern is qr/[Pp]assword.*?:|[Pp]assphrase.*?:/
+#
+#	$test_success: 0 | 1. if 1, login will do an extra-test to verify if the password
 # 		entered was accepted. The test consists in verifying if, after sending the password,
 #		the "Password" prompt shows up again what would indicate that the password was rejected.
 #		This test is disabled by default.
+#
+#	OBS: the number of paramaters passed to this method will tell it what parameters are being passed:
+#	0 parameters: login() : All the default values will be used.
+#	1 parameter:  login(1) : The $test_success parameter is set.
+#	2 parameters: login("Login:", "Password:") : the $login_prompt and $password_prompt parameters are set.
+#	3 parameters: login("Login:", "Password;", 1) : the three parameters received values in this order.
+#
 # returns:
 #	string: whatever the SSH server wrote in my input stream after loging in. This usually is some
 #		welcome message and/or the remote prompt. You could use this string to do your verification
@@ -142,7 +170,18 @@ sub run_ssh {
 # 	SSHConnectionError: if the connection failed for some reason, like invalid 'host' address or network problems.
 sub login {
     my Net::SSH::Expect $self = shift;
-	my $test_success = @_ ? shift : 0;
+
+	# setting the default values for the parameters
+	my ($login_prompt, $password_prompt, $test_success) = ( qr/ogin:\s*$/, qr/[Pp]assword.*?:|[Pp]assphrase.*?:/, 0);
+	
+	# attributing the user defined values
+	if (@_ == 2 || @_ == 3) {
+		$login_prompt = shift;
+		$password_prompt = shift;
+	}
+	if (@_ == 1) {
+		$test_success = shift;
+	}
 
 	my $user = $self->{user};
 	my $password = $self->{password};
@@ -162,8 +201,8 @@ sub login {
 	# loggin in
 	$self->_sec_expect($timeout,
 		[ qr/\(yes\/no\)\?\s*$/ => sub { $exp->send("yes$t"); exp_continue; } ],
-		[ qr/[Pp]assword.*?:|[Pp]assphrase.*?:/  => sub { $exp->send("$password$t"); } ],
-		[ qr/ogin:\s*$/         => sub { $exp->send("$user$t"); exp_continue; } ],
+		[ $password_prompt		=> sub { $exp->send("$password$t"); } ],
+		[ $login_prompt         => sub { $exp->send("$user$t"); exp_continue; } ],
 		[ qr/REMOTE HOST IDEN/  => sub { print "FIX: .ssh/known_hosts\n"; exp_continue; } ],
 		[ timeout				=> sub 
 			{ 
@@ -177,7 +216,7 @@ sub login {
 	# verifying if we failed to logon
 	if ($test_success) {
 		$self->_sec_expect($timeout, 
-			[ qr/[Pp]assword.*?:|[Pp]assphrase.*?:/  => 			
+			[ $password_prompt  => 			
 				sub { 
 					my $error = $self->peek();
 					croak(SSH_AUTHENTICATION_ERROR . " Error: Bad password [$error]");
