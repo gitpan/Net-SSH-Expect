@@ -78,7 +78,7 @@ Net::SSH::Expect - SSH wrapper to execute remote commands
 	$ssh->send ("find /home");
 	my $chunk;
 	while ($chunk = $ssh->peek(1)) { # grabs chunks of output each 1 second
-	    $ssh->eat($chunk);
+	    print $ssh->eat($chunk);
 	}
 
 	# Now let's run an interactive command, like passwd.
@@ -158,14 +158,8 @@ Also, interactive commands like 'passwd' or 'mail' won't be able to print their 
 But other system commands will run better: 'ls -l' will be printed without terminal control characters.
 'ps -ef' will have the command lines printed fully, since there is no 'columns' terminal limitation.
 
-Moral of the story: pseudo terminals are bad, avoid them.
-
-=head1 WARNING: under development, API can change from version to version.
-
-Caution: new versions may not be backward compatible until this stage of development.
-
-Before you upgrade for the last version be sure you verified what changed in the Changes file that comes with the
-distribution package.
+Moral of the story: pseudo terminals do many character translations that can bring some unexpected results
+in some situations. Avoid them if you can.
 
 =head1 EXPORT
 
@@ -319,7 +313,7 @@ Causes some methods to print debug messages to the STDERR. This feature is not w
 	#	boolean: 1 if the ssh ran OK or 0 otherwise. In case of failures, use $! to do get info.
 
 
-=item string B<login($test_success)>  - authenticates on the ssh server. 
+=item string B<login([$login_prompt, $password_prompt] [,$test_success])>  - authenticates on the ssh server. 
 
 	# string login ([$login_prompt, $password_prompt] [,$test_success]) - authenticates on the ssh server. 
 	#	This method responds to the authentication prompt sent by the SSH server. 
@@ -540,10 +534,10 @@ IllegalState: if this there is no valid ssh connection established
 
 Net::SCP::Expect, Net::SCP, Net::SSH::Perl, L<Expect>
 
-=head1 REPORT YOUR TESTS TO ME, PLEASE
+=head1 REPORTING BUGS
 
-Please email me if you had problems or successes using my module. This way I can, one day, flag 
-this module as "mature" in the modules database.
+To report bugs please use the bug reporting tool available on CPAN website, in the module's page. That way I can
+keep track of what I need to do and I can also communicate with you through that tool.
 
 =head1 AUTHOR
 

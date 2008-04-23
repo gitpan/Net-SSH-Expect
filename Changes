@@ -1,8 +1,12 @@
 Revision history for Perl extension Net::SSH::Expect.
 
+1.09 2008/04/22
+	- fixed bug 35236, it's a documentation bug. There was no code change.
+
 1.08 2008/04/19
 	- fixed bug 35141 updating the login() method enabling it to receive the "Login:" and "Password:" prompt
 	patterns as parameters giving the user the ability to customize what prompts should be expected.
+	this change is backward compatible.
 	- updated documentation of method run_ssh() explaining how to use it to enable a public-key authenticated
 	ssh connection.
 
